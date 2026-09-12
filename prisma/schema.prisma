@@ -1,0 +1,106 @@
+// LEER - 1:1 video coaching platform
+// M1 schema: identity, role elevation, Stripe Connect onboarding state.
+//
+// Provider note: SQLite is used for local development so the app runs with no
+// external services. Switch `provider` to "postgresql" and point DATABASE_URL at
+// a Postgres instance for staging/production - no model changes are required,
+// nothing here uses a SQLite-only or Postgres-only type.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// A single human. Everyone signs up as a Trainee; `isTrainer` is flipped to
+/// true by Stripe Connect onboarding completing, never by the user asking.
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+
+  /// Handle powering the public trainer URL (leer.fit/<username>).
+  /// Null until the user becomes a trainer.
+  username String? @unique
+
+  /// THE role flag from the spec. Derived state - see lib/connect.ts.
+  /// Only ever set from Stripe's own account status, so it cannot be spoofed
+  /// by a client-side call.
+  isTrainer        Boolean   @default(false)
+  trainerActiveAt  DateTime?
+
+  // --- Stripe Connect (Express account) ---
+  stripeAccountId        String?   @unique
+  /// Mirrors of Stripe's account object. Refreshed on return from onboarding
+  /// and by the account.updated webhook.
+  stripeDetailsSubmitted Boolean   @default(false)
+  /// capabilities.transfers === "active". THE capability that matters under
+  /// separate charges and transfers - see lib/connect.ts.
+  stripeTransfersActive  Boolean   @default(false)
+  stripeChargesEnabled   Boolean   @default(false)
+  stripePayoutsEnabled   Boolean   @default(false)
+  stripeSyncedAt         DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  accounts Account[]
+  sessions Session[]
+
+  @@index([isTrainer])
+}
+
+// --- Auth.js (NextAuth) standard models ---
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+/// Every Stripe webhook we have already handled, so a redelivery is a no-op.
+/// Stripe retries aggressively and will replay events; without this an
+/// account.updated replay could re-run side effects.
+model ProcessedWebhookEvent {
+  id          String   @id
+  type        String
+  processedAt DateTime @default(now())
+}

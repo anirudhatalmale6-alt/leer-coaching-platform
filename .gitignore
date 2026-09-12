@@ -39,3 +39,11 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local sqlite database
+prisma/*.db
+prisma/*.db-journal
+*.db
+
+# allow the template
+!.env.example

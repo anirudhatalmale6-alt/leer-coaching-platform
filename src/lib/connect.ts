@@ -47,7 +47,7 @@ export function qualifiesAsTrainer(status: ConnectStatus): boolean {
   return status.detailsSubmitted && status.transfersActive && status.payoutsEnabled;
 }
 
-/** Derive a unique public handle for leer.fit/<username>. */
+/** Derive a unique public handle for leersports.com/<username>. */
 async function allocateUsername(seed: string): Promise<string> {
   const base =
     seed
@@ -64,7 +64,7 @@ async function allocateUsername(seed: string): Promise<string> {
   return `${base}${Date.now().toString(36)}`;
 }
 
-/** Reserved words that must never become a trainer URL, since leer.fit/<username>
+/** Reserved words that must never become a trainer URL, since leersports.com/<username>
  *  shares its namespace with the app's own routes. */
 const RESERVED = new Set([
   "api", "auth", "dashboard", "connect", "coaching", "login", "logout",

@@ -10,7 +10,7 @@ const steps = [
   {
     n: "02",
     title: "Connect Stripe to coach",
-    body: "Finish Stripe onboarding and your account is elevated to Trainer automatically, with your own leer.fit URL.",
+    body: "Finish Stripe onboarding and your account is elevated to Trainer automatically, with your own leersports.com URL.",
   },
   {
     n: "03",

@@ -17,7 +17,7 @@ What is in this milestone:
 - Everyone signs up as a **Trainee**. No role picker, no self-service elevation.
 - Stripe Connect **Express** onboarding, with account links created per attempt
 - Automatic **Trainee -> Trainer** elevation driven by Stripe's own account state
-- Public trainer URL issued on elevation: `leer.fit/<username>`
+- Public trainer URL issued on elevation: `leersports.com/<username>`
 - Stripe `account.updated` webhook with signature verification and replay protection
 - Dev-mode shortcuts so the app runs before Google and Stripe credentials exist
 
@@ -103,14 +103,43 @@ npm test
 
 ## Going to production
 
+Target infrastructure: **Vercel** (app) + **Neon** (Postgres) + **Upstash**
+(Redis) + **AWS S3** (video), on **leersports.com**.
+
 1. Switch `provider` in `prisma/schema.prisma` to `postgresql`, point
-   `DATABASE_URL` at Postgres, run `npm run db:migrate`. No model changes needed -
-   nothing in the schema uses a SQLite-only type.
+   `DATABASE_URL` at Neon, run `npm run db:migrate`. No model changes needed -
+   the schema has been checked against the Postgres generator and translates
+   cleanly (`prisma migrate diff --from-empty --to-schema-datamodel`).
 2. Set every variable in `.env.example`. Leave `LEER_DEV_LOGIN` empty.
-3. Register the Google OAuth redirect URI: `<AUTH_URL>/api/auth/callback/google`
+3. Register both Google OAuth redirect URIs:
+   `https://leersports.com/api/auth/callback/google` and the localhost one for
+   development.
 4. Point a Stripe webhook endpoint at `/api/stripe/webhook`, subscribed to
    `account.updated`, and set `STRIPE_WEBHOOK_SECRET`.
 5. Delete `src/app/api/dev/` before the platform accepts real money.
+
+`postinstall` runs `prisma generate`, which Vercel needs - its build cache would
+otherwise serve a stale Prisma client after a schema change.
+
+### One thing to settle before M3: where the queue worker runs
+
+BullMQ is a **worker** - a process that holds a Redis connection open and waits.
+Vercel runs functions per invocation and has no always-on process to host one, so
+the 24h timeout queue cannot live in this app's deployment. Upstash is fine as
+the Redis itself; the worker is the problem.
+
+Three options, in order of preference:
+
+1. **Vercel Cron** hitting an internal sweep route every minute, which finds
+   expired holds and cancels them. No extra host, no extra bill, and a 24h
+   deadline does not need second-level precision. Drops BullMQ.
+2. **BullMQ on a small always-on host** (Railway, Render, Fly) alongside Vercel.
+   Keeps the spec exactly, costs a few dollars a month, one more thing to deploy.
+3. **Upstash QStash** - a delayed HTTP callback scheduled at purchase time.
+   Serverless-native, but a second Upstash product to configure.
+
+All three produce the same user-visible behaviour. Option 1 is the
+recommendation.
 
 ---
 

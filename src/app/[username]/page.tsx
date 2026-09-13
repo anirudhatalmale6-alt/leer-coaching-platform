@@ -1,8 +1,9 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
+import { appUrl } from "@/lib/env";
 
 /**
- * The public trainer URL issued on role elevation: leer.fit/<username>.
+ * The public trainer URL issued on role elevation: leersports.com/<username>.
  *
  * M1 proves the URL exists and resolves to the right person. The profile
  * itself - banner, bio, gallery, sales cards - is outside the job-post scope
@@ -34,7 +35,7 @@ export default async function TrainerPage({
           </div>
           <h1 className="mt-4 text-3xl font-semibold">{trainer.name}</h1>
           <p className="mt-1 text-sm text-[var(--muted)]">
-            leer.fit/{username} - coaching since{" "}
+            {appUrl.replace(/^https?:\/\//, "")}/{username} - coaching since{" "}
             {trainer.trainerActiveAt?.toISOString().slice(0, 10) ?? "today"}
           </p>
         </div>

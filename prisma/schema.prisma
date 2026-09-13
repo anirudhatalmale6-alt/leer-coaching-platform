@@ -24,7 +24,7 @@ model User {
   emailVerified DateTime?
   image         String?
 
-  /// Handle powering the public trainer URL (leer.fit/<username>).
+  /// Handle powering the public trainer URL (leersports.com/<username>).
   /// Null until the user becomes a trainer.
   username String? @unique
 

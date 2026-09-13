@@ -16,7 +16,7 @@ export default function DevConnect() {
   const router = useRouter();
   const [busy, setBusy] = useState<string | null>(null);
 
-  async function send(label: string, body: Record<string, boolean>) {
+  async function send(label: string, body: Record<string, unknown>) {
     setBusy(label);
     await fetch("/api/dev/simulate-connect", {
       method: "POST",
@@ -27,19 +27,13 @@ export default function DevConnect() {
     setBusy(null);
   }
 
-  const cases: { label: string; body: Record<string, boolean> }[] = [
-    {
-      label: "Fully onboarded",
-      body: { detailsSubmitted: true, transfersActive: true, payoutsEnabled: true },
-    },
+  const cases: { label: string; body: Record<string, unknown> }[] = [
+    { label: "Fully onboarded", body: { transfersStatus: "active" } },
     {
       label: "Form done, still verifying",
-      body: { detailsSubmitted: true, transfersActive: false, payoutsEnabled: false },
+      body: { transfersStatus: "restricted", requirementsOutstanding: true },
     },
-    {
-      label: "Abandoned halfway",
-      body: { detailsSubmitted: false, transfersActive: false, payoutsEnabled: false },
-    },
+    { label: "Abandoned halfway", body: { transfersStatus: "unrequested" } },
   ];
 
   return (

@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import type Stripe from "stripe";
 import { prisma } from "@/lib/prisma";
 import { getStripe } from "@/lib/stripe";
 import { applyConnectStatus, readStatus } from "@/lib/connect";
@@ -8,10 +7,14 @@ import { stripeWebhookConfigured } from "@/lib/env";
 /**
  * Stripe webhook receiver.
  *
- * M1 handles account.updated, which is what actually completes the Trainee ->
- * Trainer elevation: Stripe frequently finishes verifying an account minutes or
- * hours after the user has closed the onboarding tab, so the return-page sync
- * alone would leave people stuck as trainees.
+ * Handles the Accounts v2 capability event, which is what actually completes
+ * the Trainee -> Trainer elevation: Stripe often finishes verifying an account
+ * minutes or hours after the trainer has closed the onboarding tab, so the
+ * return-page sync alone would leave people stuck as trainees.
+ *
+ * The v1 `account.updated` event is deliberately not handled - v2 accounts do
+ * not emit it, and leaving a handler for it would look like coverage we do not
+ * have.
  *
  * M3 adds the payment and transfer events on the same plumbing.
  */
@@ -20,6 +23,18 @@ import { stripeWebhookConfigured } from "@/lib/env";
 // or re-encoded before verification.
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+/** v2 account events we act on. */
+const RECIPIENT_CAPABILITY_EVENT =
+  "v2.core.account[configuration.recipient].capability_status_updated";
+const RECIPIENT_UPDATED_EVENT = "v2.core.account[configuration.recipient].updated";
+
+type AnyEvent = {
+  id: string;
+  type: string;
+  data?: { object?: Record<string, unknown> };
+  related_object?: { id?: string };
+};
 
 export async function POST(req: Request) {
   const stripe = getStripe();
@@ -34,13 +49,13 @@ export async function POST(req: Request) {
 
   const raw = await req.text();
 
-  let event: Stripe.Event;
+  let event: AnyEvent;
   try {
     event = stripe.webhooks.constructEvent(
       raw,
       signature,
       process.env.STRIPE_WEBHOOK_SECRET!,
-    );
+    ) as unknown as AnyEvent;
   } catch (err) {
     // An unverified body is not logged in full - it is attacker-controlled.
     console.error("[stripe/webhook] signature verification failed", (err as Error).message);
@@ -53,30 +68,31 @@ export async function POST(req: Request) {
   if (seen) return NextResponse.json({ received: true, duplicate: true });
 
   try {
-    switch (event.type) {
-      case "account.updated": {
-        const account = event.data.object as Stripe.Account;
-        const userId = account.metadata?.leerUserId;
+    if (event.type === RECIPIENT_CAPABILITY_EVENT || event.type === RECIPIENT_UPDATED_EVENT) {
+      // A v2 event carries the account id rather than the whole account, so the
+      // authoritative state is fetched rather than trusted from the payload.
+      const accountId =
+        event.related_object?.id ??
+        (event.data?.object as { id?: string } | undefined)?.id;
 
-        // Fall back to a lookup by account id: metadata can be edited away in
-        // the Stripe dashboard, but the stored account id cannot.
-        const user = userId
-          ? await prisma.user.findUnique({ where: { id: userId } })
-          : await prisma.user.findUnique({ where: { stripeAccountId: account.id } });
-
+      if (!accountId) {
+        console.warn("[stripe/webhook] capability event with no account id", event.id);
+      } else {
+        const user = await prisma.user.findUnique({ where: { stripeAccountId: accountId } });
         if (!user) {
-          console.warn("[stripe/webhook] account.updated for unknown account", account.id);
-          break;
+          console.warn("[stripe/webhook] event for unknown account", accountId);
+        } else {
+          const account = await stripe.v2.core.accounts.retrieve(accountId, {
+            include: ["configuration.recipient", "requirements"],
+          });
+          await applyConnectStatus(
+            user.id,
+            readStatus(account as unknown as Parameters<typeof readStatus>[0]),
+          );
         }
-
-        await applyConnectStatus(user.id, readStatus(account));
-        break;
       }
-
-      default:
-        // Unhandled types are acknowledged so Stripe stops retrying them.
-        break;
     }
+    // Unhandled types are acknowledged so Stripe stops retrying them.
 
     await prisma.processedWebhookEvent.create({
       data: { id: event.id, type: event.type },

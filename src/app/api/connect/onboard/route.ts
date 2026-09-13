@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { startOnboarding } from "@/lib/connect";
+import { isSupportedCountry, startOnboarding } from "@/lib/connect";
 import { stripeConfigured } from "@/lib/env";
 
 /**
@@ -9,7 +9,7 @@ import { stripeConfigured } from "@/lib/env";
  * POST, not GET: it creates a Stripe account on first call, so it must not be
  * triggerable by a prefetch, a crawler, or an <img> tag on another site.
  */
-export async function POST() {
+export async function POST(req: Request) {
   const session = await auth();
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Not signed in" }, { status: 401 });
@@ -22,8 +22,17 @@ export async function POST() {
     );
   }
 
+  const body = (await req.json().catch(() => ({}))) as { country?: string };
+  const country = (body.country ?? "").toUpperCase();
+  if (!isSupportedCountry(country)) {
+    return NextResponse.json(
+      { error: "Choose the country your bank account is in." },
+      { status: 422 },
+    );
+  }
+
   try {
-    const url = await startOnboarding(session.user.id);
+    const url = await startOnboarding(session.user.id, country);
     return NextResponse.json({ url });
   } catch (err) {
     console.error("[connect/onboard]", err);

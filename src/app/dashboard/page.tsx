@@ -134,19 +134,14 @@ export default async function Dashboard({
               note={user.stripeAccountId ?? undefined}
             />
             <Row
-              label="Onboarding form submitted"
-              ok={user.stripeDetailsSubmitted}
-              note="details_submitted"
-            />
-            <Row
               label="Can receive transfers"
-              ok={user.stripeTransfersActive}
-              note="capabilities.transfers - the one that matters for separate charges and transfers"
+              ok={user.stripeTransfersStatus === "active"}
+              note={`stripe_balance.stripe_transfers = ${user.stripeTransfersStatus ?? "not requested"}`}
             />
             <Row
-              label="Payouts to bank enabled"
-              ok={user.stripePayoutsEnabled}
-              note="payouts_enabled"
+              label="Stripe has everything it needs"
+              ok={!user.stripeRequirementsOutstanding}
+              note="outstanding requirements block the transfers capability"
             />
           </div>
           {user.stripeSyncedAt && (

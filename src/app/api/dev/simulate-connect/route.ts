@@ -27,9 +27,8 @@ export async function POST(req: Request) {
   }
 
   const body = (await req.json().catch(() => ({}))) as {
-    detailsSubmitted?: boolean;
-    transfersActive?: boolean;
-    payoutsEnabled?: boolean;
+    transfersStatus?: string;
+    requirementsOutstanding?: boolean;
   };
 
   // Give the user a placeholder account id if they have none, so the rest of
@@ -43,10 +42,8 @@ export async function POST(req: Request) {
   }
 
   const updated = await applyConnectStatus(session.user.id, {
-    detailsSubmitted: body.detailsSubmitted ?? true,
-    transfersActive: body.transfersActive ?? true,
-    payoutsEnabled: body.payoutsEnabled ?? true,
-    chargesEnabled: false, // separate charges and transfers: never needed
+    transfersStatus: body.transfersStatus ?? "active",
+    requirementsOutstanding: body.requirementsOutstanding ?? false,
   });
 
   return NextResponse.json({

@@ -9,16 +9,16 @@ Stack: Next.js 16 (App Router) - TypeScript - Prisma - Auth.js v5 - Stripe Conne
 
 ## Milestone 1 - Auth, roles, Stripe Connect onboarding
 
-**Status: complete.** 8 unit tests pass, production build clean, click-through verified.
+**Status: complete.** Verified against the live Stripe test API for US, GB and DE trainers.
 
 What is in this milestone:
 
 - Google OAuth single sign-on (Auth.js v5, database sessions)
 - Everyone signs up as a **Trainee**. No role picker, no self-service elevation.
-- Stripe Connect **Express** onboarding, with account links created per attempt
+- Stripe Connect onboarding via **Accounts v2**, with account links created per attempt
 - Automatic **Trainee -> Trainer** elevation driven by Stripe's own account state
 - Public trainer URL issued on elevation: `leersports.com/<username>`
-- Stripe `account.updated` webhook with signature verification and replay protection
+- Stripe v2 capability webhook with signature verification and replay protection
 - Dev-mode shortcuts so the app runs before Google and Stripe credentials exist
 
 ---
@@ -46,22 +46,64 @@ work. So:
    7-day clock is gone.
 3. **On approval** - transfer 80% to the trainer's connected account.
 
-### What that means for onboarding, which is this milestone
+### What that means for onboarding
 
-Because the trainee's card is charged on the **platform** account, a connected
-account never processes a card itself. So the capability an Express account needs
-is `transfers`, **not** `card_payments`.
+Because the trainee's card is charged on the **platform** account, a trainer's
+connected account never processes a card itself. A trainer is a **recipient**,
+not a merchant.
 
-`src/lib/connect.ts` therefore:
+## Accounts v2
 
-- requests only `capabilities: { transfers: { requested: true } }`
-- elevates on `details_submitted && capabilities.transfers === "active" && payouts_enabled`
+Stripe **refuses v1 account creation** for new Connect integrations:
 
-That last line is stricter than "they finished the form" on purpose. Stripe very
-often returns `details_submitted: true` while still verifying the account.
-Elevating there would produce a trainer who can take a booking and then never be
-paid - and by that point the trainee's money is already in escrow. There is a
-test for exactly this case.
+> Stripe no longer recommends Accounts v1 for new Connect integrations. Create
+> connected accounts with POST /v2/core/accounts instead.
+
+So there is no `type: "express"` anywhere. The account is created through
+`v2.core.accounts` with `dashboard: "express"`, `fees_collector: "application"`
+and `losses_collector: "application"` - the last is required, because
+`losses_collector: "stripe"` is rejected outright alongside separate charges and
+transfers.
+
+### The role gate
+
+`qualifiesAsTrainer` elevates only when
+
+```
+configuration.recipient.capabilities.stripe_balance.stripe_transfers.status === "active"
+```
+
+The v1 fields (`details_submitted`, `charges_enabled`, `payouts_enabled`) are
+deprecated for v2 accounts and are not read at all. "active" is the only value
+that means money can actually reach the trainer: a freshly created account comes
+back `restricted` with `requirements_past_due`, and elevating there produces a
+trainer who can take a booking and never be paid - with the trainee's money
+already in escrow. Unknown future statuses fail closed. Tested both ways.
+
+### Capability rules differ by country - verified, not assumed
+
+A recipient-only account is **not** universally allowed. Tested against the live
+API:
+
+| country | recipient only | needs merchant + card_payments |
+| --- | --- | --- |
+| US | works | no |
+| GB, DE, CA, AU, SG | rejected | yes |
+
+Rejection is `capability_not_available_without_other_capability`. Rather than
+hardcode that list - it would rot as Stripe changes per-country rules -
+`createRecipientAccount` asks for the minimum and widens only when Stripe says
+to, so trainers in countries that allow it still get the shorter onboarding.
+
+Two consequences that cost real debugging time:
+
+- `identity.country` is **required** at creation (`identity_country_required`)
+  and is not comfortably changed afterwards, so the trainer picks it before
+  onboarding rather than inheriting the platform's country. LEER is pitched as
+  global; defaulting everyone to US would strand every trainer outside it.
+- The account link's `configurations` must **match the account's applied
+  configurations**, or Stripe rejects it. They are read back from the account
+  rather than assumed, which is what makes the GB path work.
 
 ---
 
@@ -103,8 +145,9 @@ npm test
 
 ## Going to production
 
-Target infrastructure: **Vercel** (app) + **Neon** (Postgres) + **Upstash**
-(Redis) + **Cloudflare R2** (video), on **leersports.com**.
+Target infrastructure: **Vercel** (app) + **Neon** (Postgres) + **Cloudflare R2**
+(video), on **leersports.com**. The 24h sweep runs on Vercel Cron, so no Redis
+is needed - see below.
 
 Note: the spec says AWS S3; the credentials supplied are Cloudflare R2, which is
 S3-compatible. The client is configured with `requestChecksumCalculation:
@@ -120,7 +163,8 @@ that R2 rejects with a confusing 400.
    `https://leersports.com/api/auth/callback/google` and the localhost one for
    development.
 4. Point a Stripe webhook endpoint at `/api/stripe/webhook`, subscribed to
-   `account.updated`, and set `STRIPE_WEBHOOK_SECRET`.
+   `v2.core.account[configuration.recipient].capability_status_updated`, and set
+   `STRIPE_WEBHOOK_SECRET`.
 5. Delete `src/app/api/dev/` before the platform accepts real money.
 
 `postinstall` runs `prisma generate`, which Vercel needs - its build cache would

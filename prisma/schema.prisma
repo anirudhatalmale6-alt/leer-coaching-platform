@@ -34,17 +34,23 @@ model User {
   isTrainer        Boolean   @default(false)
   trainerActiveAt  DateTime?
 
-  // --- Stripe Connect (Express account) ---
-  stripeAccountId        String?   @unique
-  /// Mirrors of Stripe's account object. Refreshed on return from onboarding
-  /// and by the account.updated webhook.
-  stripeDetailsSubmitted Boolean   @default(false)
-  /// capabilities.transfers === "active". THE capability that matters under
-  /// separate charges and transfers - see lib/connect.ts.
-  stripeTransfersActive  Boolean   @default(false)
-  stripeChargesEnabled   Boolean   @default(false)
-  stripePayoutsEnabled   Boolean   @default(false)
-  stripeSyncedAt         DateTime?
+  // --- Stripe Connect (Accounts v2, recipient configuration) ---
+  stripeAccountId String? @unique
+  /// Mirror of Stripe's account. Refreshed on return from onboarding and by the
+  /// capability_status_updated webhook.
+  /// Accounts v2: configuration.recipient.capabilities.stripe_balance
+  /// .stripe_transfers.status. "active" is the only value that means money can
+  /// actually reach this trainer - see lib/connect.ts.
+  ///
+  /// The v1 fields (details_submitted / charges_enabled / payouts_enabled) are
+  /// deliberately gone: Stripe deprecated them for v2 accounts and reading them
+  /// would silently report false for a perfectly healthy trainer.
+  /// ISO country chosen at onboarding. Stripe fixes this at account
+  /// creation, so it is recorded for support rather than re-derived.
+  stripeCountry                 String?
+  stripeTransfersStatus         String?
+  stripeRequirementsOutstanding Boolean   @default(false)
+  stripeSyncedAt                DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

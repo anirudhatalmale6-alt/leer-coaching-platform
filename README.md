@@ -104,7 +104,12 @@ npm test
 ## Going to production
 
 Target infrastructure: **Vercel** (app) + **Neon** (Postgres) + **Upstash**
-(Redis) + **AWS S3** (video), on **leersports.com**.
+(Redis) + **Cloudflare R2** (video), on **leersports.com**.
+
+Note: the spec says AWS S3; the credentials supplied are Cloudflare R2, which is
+S3-compatible. The client is configured with `requestChecksumCalculation:
+"WHEN_REQUIRED"` because recent AWS SDK versions send flexible-checksum headers
+that R2 rejects with a confusing 400.
 
 1. Switch `provider` in `prisma/schema.prisma` to `postgresql`, point
    `DATABASE_URL` at Neon, run `npm run db:migrate`. No model changes needed -
@@ -143,12 +148,48 @@ recommendation.
 
 ---
 
-## Coming in later milestones
+## Milestone 2 - the analysis canvas
 
-- **M2** - S3 signed-URL upload, the WebGL analysis canvas (frame-by-frame,
-  angle and line drawing, 2-split comparison), the coaching room and its session
-  guard
-- **M3** - the escrow flow above, BullMQ 24h timeout queue, 80/20 payout, deploy
+**Status: canvas engine complete** at `/canvas`. Upload to storage is still
+pending a bucket name.
+
+- Frame-by-frame stepping, forwards and backwards, with keyboard shortcuts
+- Angle measurement (3 points), line measurement with a pixel readout, text labels
+- Split-screen comparison of two sessions, with an alignment offset
+- Annotations pinned to a frame index and stored in normalised video coordinates
+- WebGL2 compositing with an automatic Canvas2D fallback
+
+### How frame accuracy is proven, not claimed
+
+The two bundled test clips have their frame number burned into every frame by
+ffmpeg. The test suite steps the UI to a target frame, reads the video's pixels,
+and compares that region against the same frame extracted from the file by
+ffmpeg - and against its neighbours. The correct frame scores a difference of
+~0.25 while frames either side score 2-4, so the match is unambiguous.
+
+Run it with `python3 scripts/frame_proof.py` against a running dev server
+(needs `playwright` and `pillow`).
+
+### Three bugs this found, worth knowing about
+
+1. **Frame rate measured across a seek.** `requestVideoFrameCallback` also fires
+   when a seek completes, so stepping produced samples like "6 frames spanning 2
+   seconds" - a plausible 3 fps. Since the end of the clip is derived from fps,
+   the timeline then clamped at frame 29 of 300. Measurement is now restricted to
+   continuous playback, with a lower bound as a second line of defence.
+2. **Stepping derived the next frame from `video.currentTime`,** which lags the
+   seek, so two quick presses both computed from the same stale value and one was
+   silently dropped. The intended frame is now authoritative.
+3. **`dispose()` called `loseContext()`,** which permanently poisoned the canvas:
+   the next mount got the dead context back and the video rendered as a black
+   rectangle. React remounts this component on every navigation.
+
+---
+
+## Coming in M3
+
+- S3/R2 signed-URL upload and the coaching room session guard
+- The escrow flow above, the 24h timeout sweep (Vercel Cron), 80/20 payout, deploy
 
 Video uploads are capped at **under 60 seconds and 100MB** (confirmed with the
 client). At that size the whole clip decodes to frames in browser memory, which

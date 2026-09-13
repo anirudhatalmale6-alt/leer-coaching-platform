@@ -47,3 +47,7 @@ prisma/*.db-journal
 
 # allow the template
 !.env.example
+
+# local verification scripts (may reference credentials)
+.scratch/
+scripts/.frames/

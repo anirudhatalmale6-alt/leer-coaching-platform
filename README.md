@@ -150,8 +150,7 @@ recommendation.
 
 ## Milestone 2 - the analysis canvas
 
-**Status: canvas engine complete** at `/canvas`. Upload to storage is still
-pending a bucket name.
+**Status: complete.** Canvas at `/canvas`, upload flow at `/upload`.
 
 - Frame-by-frame stepping, forwards and backwards, with keyboard shortcuts
 - Angle measurement (3 points), line measurement with a pixel readout, text labels
@@ -186,9 +185,52 @@ Run it with `python3 scripts/frame_proof.py` against a running dev server
 
 ---
 
+## Storage - Cloudflare R2 (verified end to end)
+
+Uploads go straight from the browser to R2 via a signed URL; the file never
+passes through the server. Verified against the live bucket:
+
+| check | result |
+| --- | --- |
+| upload via signed PUT | 200 |
+| same URL, 1KB extra appended | 403 - the signed `ContentLength` pins the size, so the 100MB cap is enforced by R2, not by trusting the browser |
+| stored object | correct byte count and content type |
+| signed playback | 200 |
+| `Range: bytes=0-1023` | 206 Partial Content - **frame stepping depends on this** |
+| unsigned fetch | 400 - the bucket is private |
+
+Limits (`src/lib/storage/r2.ts`): 100MB, 60 seconds, MP4/WebM/MOV. Duration is
+measured in the browser before the upload starts so a too-long clip is rejected
+instantly instead of after a 90MB transfer; size and type are re-checked server
+side regardless.
+
+Object keys are `uploads/<userId>/<uuid>.<ext>`. The UUID matters: coaching
+footage is a person's body, and a predictable key is a directory listing for
+anyone who learns the bucket hostname.
+
+### The bucket needs a CORS policy
+
+Browser uploads are blocked until this is set in the Cloudflare dashboard
+(R2 > bucket > Settings > CORS policy). It cannot be set through the S3 API
+token:
+
+```json
+[
+  {
+    "AllowedOrigins": ["https://leersports.com", "https://www.leersports.com", "http://localhost:3000"],
+    "AllowedMethods": ["PUT", "GET", "HEAD"],
+    "AllowedHeaders": ["content-type"],
+    "ExposeHeaders": ["etag"],
+    "MaxAgeSeconds": 3600
+  }
+]
+```
+
+---
+
 ## Coming in M3
 
-- S3/R2 signed-URL upload and the coaching room session guard
+- The coaching room and its session guard
 - The escrow flow above, the 24h timeout sweep (Vercel Cron), 80/20 payout, deploy
 
 Video uploads are capped at **under 60 seconds and 100MB** (confirmed with the

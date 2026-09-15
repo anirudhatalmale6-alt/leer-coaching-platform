@@ -58,6 +58,9 @@ model User {
   accounts Account[]
   sessions Session[]
 
+  traineeRooms CoachingRoom[] @relation("TraineeRooms")
+  trainerRooms CoachingRoom[] @relation("TrainerRooms")
+
   @@index([isTrainer])
 }
 
@@ -100,6 +103,62 @@ model VerificationToken {
   expires    DateTime
 
   @@unique([identifier, token])
+}
+
+/// One purchased coaching session: the escrow, the clip, and the feedback.
+model CoachingRoom {
+  id String @id @default(cuid())
+
+  /// The unguessable URL segment: leersports.com/coaching/<publicId>.
+  /// Separate from the primary key so the database id is never in a URL.
+  publicId String @unique
+
+  traineeId String
+  trainerId String
+  trainee   User   @relation("TraineeRooms", fields: [traineeId], references: [id])
+  trainer   User   @relation("TrainerRooms", fields: [trainerId], references: [id])
+
+  /// R2 object key of the clip the trainee uploaded.
+  videoKey String
+
+  /// Money is stored in the smallest currency unit, as an integer. Never a
+  /// float - 0.1 + 0.2 is not 0.3, and this is somebody's payout.
+  priceCents Int
+  currency   String @default("usd")
+
+  /// See lib/escrow.ts for the state machine. Kept as a string rather than a
+  /// native enum so the same schema runs on SQLite and Postgres unchanged.
+  status String @default("awaiting_payment")
+
+  /// Authorised at purchase, captured on delivery, cancelled on timeout.
+  paymentIntentId String? @unique
+  /// The 80% transfer to the trainer, created on approval.
+  transferId String?
+  /// Set if the authorisation was cancelled or the capture refunded.
+  refundId String?
+
+  /// 24 hours after the authorisation. The sweep cancels anything past this
+  /// that has not been delivered.
+  deliverDueAt DateTime?
+  paidAt       DateTime?
+  deliveredAt  DateTime?
+  approvedAt   DateTime?
+  closedAt     DateTime?
+
+  /// Canvas marks, as produced by the analysis canvas.
+  annotations String?
+
+  /// Why the room ended, for support and for the trainee's own screen.
+  closeReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([trainerId, status])
+  @@index([traineeId])
+  /// The sweep queries exactly this pair, and it will be the hottest query on
+  /// the platform once there is volume.
+  @@index([status, deliverDueAt])
 }
 
 /// Every Stripe webhook we have already handled, so a redelivery is a no-op.

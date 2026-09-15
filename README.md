@@ -163,21 +163,23 @@ that R2 rejects with a confusing 400.
    `https://leersports.com/api/auth/callback/google` and the localhost one for
    development.
 4. Point a Stripe webhook endpoint at `/api/stripe/webhook`, subscribed to
-   `v2.core.account[configuration.recipient].capability_status_updated`, and set
-   `STRIPE_WEBHOOK_SECRET`.
-5. Delete `src/app/api/dev/` before the platform accepts real money.
+   `v2.core.account[configuration.recipient].capability_status_updated` and
+   `payment_intent.amount_capturable_updated`, and set `STRIPE_WEBHOOK_SECRET`.
+5. Set `CRON_SECRET`. The sweep refuses to run without it.
+6. Delete `src/app/api/dev/` before the platform accepts real money.
 
 `postinstall` runs `prisma generate`, which Vercel needs - its build cache would
 otherwise serve a stale Prisma client after a schema change.
 
-### One thing to settle before M3: where the queue worker runs
+### Why the timeout queue is cron, not BullMQ (decided)
 
 BullMQ is a **worker** - a process that holds a Redis connection open and waits.
 Vercel runs functions per invocation and has no always-on process to host one, so
 the 24h timeout queue cannot live in this app's deployment. Upstash is fine as
 the Redis itself; the worker is the problem.
 
-Three options, in order of preference:
+The options were, in order of preference - **option 1 was chosen**, so no Redis
+is needed at all:
 
 1. **Vercel Cron** hitting an internal sweep route every minute, which finds
    expired holds and cancels them. No extra host, no extra bill, and a 24h
@@ -261,21 +263,103 @@ token:
 ```json
 [
   {
-    "AllowedOrigins": ["https://leersports.com", "https://www.leersports.com", "http://localhost:3000"],
+    "AllowedOrigins": [
+      "https://leersports.com",
+      "https://www.leersports.com",
+      "https://<your-project>.vercel.app",
+      "http://localhost:3000"
+    ],
     "AllowedMethods": ["PUT", "GET", "HEAD"],
-    "AllowedHeaders": ["content-type"],
-    "ExposeHeaders": ["etag"],
+    "AllowedHeaders": ["content-type", "range"],
+    "ExposeHeaders": ["etag", "content-range", "accept-ranges", "content-length"],
     "MaxAgeSeconds": 3600
   }
 ]
 ```
 
+**`range` in AllowedHeaders is not optional.** A first version of this policy
+listed only `content-type`, and uploads worked perfectly - but `Range` is not a
+CORS-safelisted request header, so the video element's range requests trigger a
+preflight, and that preflight returned **403**. Verified directly against the
+bucket:
+
+| preflight requesting | result |
+| --- | --- |
+| `content-type` | 204, allowed |
+| `range` | **403, blocked** |
+
+The failure mode is nasty precisely because uploading keeps working: the clip
+lands in the bucket and then cannot be played or analysed.
+
+It is also load-bearing for the canvas itself, not just playback. The video is
+loaded with `crossOrigin="anonymous"` because WebGL cannot upload a frame from a
+cross-origin video as a texture without CORS permission - it taints the canvas.
+No CORS, no analysis.
+
 ---
 
-## Coming in M3
+## Milestone 3 - coaching room, session guard, escrow
 
-- The coaching room and its session guard
-- The escrow flow above, the 24h timeout sweep (Vercel Cron), 80/20 payout, deploy
+**Status: complete**, verified against the live Stripe test API.
+
+### Session guard
+
+The obfuscated room URL (`/coaching/a8f9-4b21-...`) stops rooms being
+enumerated; it is **not** the security boundary. Access is checked server-side
+on every render: the paying trainee and their trainer, nobody else, however the
+link was obtained. Verified in a browser:
+
+| visitor | result |
+| --- | --- |
+| signed out | redirected to sign in, room never rendered |
+| signed in, not a participant | **404** (not 403 - confirming it exists is a disclosure) |
+| paying trainee | sees room, countdown, approve button, no deliver button |
+| trainer | sees room and deliver button, no approve button |
+
+### Escrow, proven end to end
+
+| step | verified |
+| --- | --- |
+| purchase authorises only | `requires_capture`, `amount_received = 0` |
+| delivery captures | `succeeded`, `amount_received = 5000` |
+| approval transfers 80% | trainer balance `4000`, platform keeps `1000` |
+| retrying a transfer | idempotency key returns the *same* transfer - no double payout |
+| capturing twice | rejected by Stripe (`payment_intent_unexpected_state`) |
+| 24h timeout | authorisation cancelled, `amount_received = 0`, **no refund issued** |
+
+That last row is the point of authorise-then-capture: a no-show costs nothing,
+because there was never a charge to refund.
+
+### The sweep (replacing BullMQ)
+
+`/api/cron/sweep`, on Vercel Cron every 5 minutes (`vercel.json`). Verified
+against real rooms and real PaymentIntents:
+
+- overdue undelivered room → refunded, `closeReason: trainer_timeout`, Stripe
+  authorisation cancelled
+- room not yet due → untouched, authorisation still live
+- **delivered room → untouched** (the money-losing case: coach did the work)
+- released / cancelled rooms → untouched
+- running the sweep twice refunds nothing the second time
+- unauthenticated request → 404; wrong secret → 404
+
+Set `CRON_SECRET`; Vercel sends it as `Authorization: Bearer`. Without it the
+route refuses to run at all rather than running open - an unauthenticated
+endpoint that cancels payments is a denial-of-service button.
+
+### Concurrency
+
+Every state change is a conditional `UPDATE ... WHERE status = <expected>`. Two
+simultaneous approvals both see `delivered`, but only one UPDATE matches a row,
+so only one transfer is created. A read-then-write would pay the trainer twice.
+
+### One thing to know before launch
+
+Captured funds arrive **pending**, not available, so a transfer immediately
+after capture can fail with `balance_insufficient`. It surfaced during testing
+and is handled - a failed transfer leaves the room `released` with
+`closeReason: payout_pending` for retry, never un-approved or re-charged - but
+the platform needs a working balance, or payouts must wait for settlement.
 
 Video uploads are capped at **under 60 seconds and 100MB** (confirmed with the
 client). At that size the whole clip decodes to frames in browser memory, which

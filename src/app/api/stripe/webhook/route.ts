@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getStripe } from "@/lib/stripe";
 import { applyConnectStatus, readStatus } from "@/lib/connect";
+import { markPaid } from "@/lib/rooms";
 import { stripeWebhookConfigured } from "@/lib/env";
 
 /**
@@ -92,6 +93,26 @@ export async function POST(req: Request) {
         }
       }
     }
+    /**
+     * The authorisation succeeded: start the trainer's 24 hour clock.
+     *
+     * Driven by the webhook rather than the browser on purpose - a trainee who
+     * closes the tab mid-redirect must still get the room they paid for, and
+     * the browser is not a trustworthy source for "money moved".
+     */
+    if (event.type === "payment_intent.amount_capturable_updated") {
+      const pi = event.data?.object as { id?: string; metadata?: Record<string, string> } | undefined;
+      const roomId = pi?.metadata?.leerRoomId;
+      if (roomId) {
+        await markPaid(roomId);
+      } else if (pi?.id) {
+        const room = await prisma.coachingRoom.findUnique({
+          where: { paymentIntentId: pi.id },
+        });
+        if (room) await markPaid(room.id);
+      }
+    }
+
     // Unhandled types are acknowledged so Stripe stops retrying them.
 
     await prisma.processedWebhookEvent.create({

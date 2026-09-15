@@ -1,0 +1,20 @@
+# Never ship local secrets or scratch state into a deployment bundle.
+#
+# The Vercel CLI uploads the working directory, and without this file the local
+# .env - which holds live Stripe, R2 and Google credentials - is packaged and
+# read during the build. Verified: before this existed, the build logged
+# "Environment variables loaded from .env" and picked up the local SQLite URL.
+.env
+.env.*
+!.env.example
+.scratch
+.vercel
+prisma/dev.db
+*.db
+*.db-journal
+prisma/schema.postgres.prisma
+.next
+node_modules
+shots
+scripts/.frames
+*.log

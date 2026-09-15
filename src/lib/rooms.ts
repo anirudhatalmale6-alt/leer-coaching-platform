@@ -4,6 +4,7 @@ import { getStripe } from "./stripe";
 import {
   canTransition,
   deliveryDeadline,
+  isExpired,
   isValidPrice,
   trainerShareCents,
   type RoomStatus,
@@ -274,6 +275,36 @@ export async function refundExpiredRoom(roomId: string) {
     }
   }
   return true;
+}
+
+/**
+ * Settle this one room if its deadline has passed.
+ *
+ * The scheduled sweep is the guarantee, but it cannot be the only mechanism:
+ * Vercel's free tier allows a cron job only ONCE PER DAY, which would stretch
+ * the promised "refunded after 24 hours" into as much as 48. Checking the room
+ * whenever somebody actually looks at it means the common case - a trainee
+ * coming back to see what happened - resolves immediately regardless of how
+ * often the scheduler runs.
+ *
+ * Safe to call on every render: it is a no-op unless the room is genuinely
+ * expired, and refundExpiredRoom claims the transition conditionally, so it
+ * cannot race the sweep into a double refund.
+ */
+export async function settleIfExpired(room: {
+  id: string;
+  status: string;
+  deliverDueAt: Date | null;
+}): Promise<boolean> {
+  if (!isExpired(room, new Date())) return false;
+  try {
+    return await refundExpiredRoom(room.id);
+  } catch (err) {
+    // Never let a settlement failure stop the page rendering - the scheduled
+    // sweep will pick it up.
+    console.error("[rooms] opportunistic settle failed for", room.id, err);
+    return false;
+  }
 }
 
 /**

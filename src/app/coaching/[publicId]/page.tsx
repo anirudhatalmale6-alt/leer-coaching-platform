@@ -3,7 +3,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { signPlayback, storageConfigured } from "@/lib/storage/r2";
 import { describeStatus, platformFeeCents, trainerShareCents, type RoomStatus } from "@/lib/escrow";
-import { mayViewRoom } from "@/lib/rooms";
+import { mayViewRoom, settleIfExpired } from "@/lib/rooms";
 import RoomView from "./room-view";
 
 /**
@@ -38,6 +38,13 @@ export default async function CoachingRoomPage({
     redirect(`/signin?next=${encodeURIComponent(`/coaching/${publicId}`)}`);
   }
   if (!mayViewRoom(room, session.user.id)) notFound();
+
+  // If the trainer's 24 hours ran out, settle it now rather than waiting for
+  // the next scheduled sweep - see settleIfExpired().
+  if (await settleIfExpired(room)) {
+    const settled = await prisma.coachingRoom.findUnique({ where: { publicId } });
+    if (settled) room.status = settled.status;
+  }
 
   const isTrainer = session.user.id === room.trainerId;
 

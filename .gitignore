@@ -52,3 +52,11 @@ prisma/*.db-journal
 .scratch/
 scripts/.frames/
 prisma/schema.postgres.prisma
+
+.vercel
+.env.local
+
+# stray shadow databases from prisma migrate diff
+shadow.db
+fresh-shadow.db
+m3-shadow.db

@@ -51,3 +51,4 @@ prisma/*.db-journal
 # local verification scripts (may reference credentials)
 .scratch/
 scripts/.frames/
+prisma/schema.postgres.prisma

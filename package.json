@@ -9,7 +9,9 @@
     "test": "tsx --test tests/*.test.ts",
     "db:migrate": "prisma migrate deploy",
     "db:push": "prisma db push",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "db:postgres": "node scripts/prepare-postgres.mjs",
+    "vercel-build": "node scripts/prepare-postgres.mjs && prisma db push --schema prisma/schema.postgres.prisma --skip-generate && prisma generate --schema prisma/schema.postgres.prisma && next build"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.3",

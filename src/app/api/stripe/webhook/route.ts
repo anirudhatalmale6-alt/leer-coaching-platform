@@ -69,22 +69,48 @@ export async function POST(req: Request) {
     .map((s) => s.trim())
     .filter(Boolean);
 
-  let event: AnyEvent | null = null;
+  /**
+   * Verify with `verifySignatureHeader`, not `constructEvent`.
+   *
+   * constructEvent both verifies AND parses as a v1 snapshot event, and it
+   * rejects the thin payload a v2 event destination sends - observed live as
+   * "No signatures found matching the expected signature" even with a secret
+   * read straight back from the destination at creation time.
+   *
+   * verifySignatureHeader is the shared primitive: it checks the HMAC and
+   * nothing else, so one endpoint can accept both payload shapes. Parsing then
+   * happens per shape, after the bytes are known to be authentic.
+   */
+  let verified = false;
   let lastError = "";
   for (const secret of secrets) {
     try {
-      event = stripe.webhooks.constructEvent(raw, signature, secret) as unknown as AnyEvent;
+      stripe.webhooks.signature?.verifyHeader(raw, signature, secret);
+      verified = true;
       break;
     } catch (err) {
       lastError = (err as Error).message;
     }
   }
 
-  if (!event) {
+  if (!verified) {
     // An unverified body is not logged in full - it is attacker-controlled.
-    console.error("[stripe/webhook] signature verification failed against all",
-      secrets.length, "secret(s):", lastError);
+    console.error(
+      "[stripe/webhook] signature verification failed against all",
+      secrets.length,
+      "secret(s):",
+      lastError,
+    );
     return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
+  }
+
+  // Authentic bytes. A thin v2 notification carries `related_object`; a
+  // snapshot event carries `data.object`. Both shapes are handled below.
+  let event: AnyEvent;
+  try {
+    event = JSON.parse(raw) as AnyEvent;
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
   // Stripe retries on any non-2xx and also replays events; without this guard a

@@ -50,16 +50,40 @@ export async function POST(req: Request) {
 
   const raw = await req.text();
 
-  let event: AnyEvent;
-  try {
-    event = stripe.webhooks.constructEvent(
-      raw,
-      signature,
-      process.env.STRIPE_WEBHOOK_SECRET!,
-    ) as unknown as AnyEvent;
-  } catch (err) {
+  /**
+   * Verify against EVERY configured secret, not just one.
+   *
+   * Stripe will not accept v2 core events on a classic webhook endpoint - they
+   * require a v2 event destination - so a Connect platform ends up with TWO
+   * deliveries arriving at the same URL: a "thin" destination carrying the
+   * account capability events, and a snapshot one carrying the payment events.
+   * Each has its OWN signing secret. With a single secret configured, one of
+   * the two would fail verification and be rejected with a 400 forever, and the
+   * symptom would be silent: trainers finishing Stripe onboarding and never
+   * being promoted.
+   *
+   * Accepting a comma-separated list also makes secret rotation a non-event.
+   */
+  const secrets = (process.env.STRIPE_WEBHOOK_SECRET ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  let event: AnyEvent | null = null;
+  let lastError = "";
+  for (const secret of secrets) {
+    try {
+      event = stripe.webhooks.constructEvent(raw, signature, secret) as unknown as AnyEvent;
+      break;
+    } catch (err) {
+      lastError = (err as Error).message;
+    }
+  }
+
+  if (!event) {
     // An unverified body is not logged in full - it is attacker-controlled.
-    console.error("[stripe/webhook] signature verification failed", (err as Error).message);
+    console.error("[stripe/webhook] signature verification failed against all",
+      secrets.length, "secret(s):", lastError);
     return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
   }
 

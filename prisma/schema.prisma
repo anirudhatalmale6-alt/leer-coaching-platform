@@ -52,16 +52,59 @@ model User {
   stripeRequirementsOutstanding Boolean   @default(false)
   stripeSyncedAt                DateTime?
 
+  // --- Public profile (Phase 2 M1) ---
+
+  /// One line under the name on the public card. Newlines are collapsed on the
+  /// way in - see lib/profile.ts.
+  bio String?
+
+  /// One of lib/profile.ts CATEGORIES. Stored as text rather than an enum so
+  /// the same schema runs on SQLite and Postgres, and so adding a sport later
+  /// is not a migration.
+  category String?
+
+  /// Bare handles, never pasted URLs: the public page builds the link itself,
+  /// so an "Instagram" icon cannot be pointed at another site.
+  instagram String?
+  youtube   String?
+
+  /// R2 object key for the uploaded profile image. Null means fall back to the
+  /// Google avatar in `image`, then to the initial.
+  avatarKey String?
+
+  /// The coaching pass. Price is in cents and is read from HERE at checkout -
+  /// never from the browser.
+  coachingPriceCents Int     @default(5000)
+  coachingEnabled    Boolean @default(false)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  accounts Account[]
-  sessions Session[]
+  accounts      Account[]
+  sessions      Session[]
+  portfolioLinks PortfolioLink[]
 
   traineeRooms CoachingRoom[] @relation("TraineeRooms")
   trainerRooms CoachingRoom[] @relation("TrainerRooms")
 
   @@index([isTrainer])
+}
+
+/// Up to five Reels/Shorts links on the trainer's public card.
+///
+/// A relation rather than a JSON blob so ordering is explicit and a link can be
+/// indexed or counted without parsing every row.
+model PortfolioLink {
+  id       String @id @default(cuid())
+  userId   String
+  url      String
+  /// 0-based display order. Unique per user so two links cannot claim a slot.
+  position Int
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, position])
+  @@index([userId])
 }
 
 // --- Auth.js (NextAuth) standard models ---
@@ -130,7 +173,14 @@ model CoachingRoom {
   /// native enum so the same schema runs on SQLite and Postgres unchanged.
   status String @default("awaiting_payment")
 
+  /// The hosted Checkout Session the trainee pays through. Recorded at
+  /// creation; the PaymentIntent below only exists once they actually pay, so
+  /// this is the only handle on an abandoned booking.
+  checkoutSessionId String? @unique
+
   /// Authorised at purchase, captured on delivery, cancelled on timeout.
+  /// Filled in by the webhook, not at creation - Checkout mints the
+  /// PaymentIntent itself when the trainee reaches the payment step.
   paymentIntentId String? @unique
   /// The 80% transfer to the trainer, created on approval.
   transferId String?
@@ -147,6 +197,10 @@ model CoachingRoom {
 
   /// Canvas marks, as produced by the analysis canvas.
   annotations String?
+
+  /// "What do you want the trainer to focus on?" from the booking modal.
+  /// Optional: a trainee who just wants a general look should not be blocked.
+  focusNote String?
 
   /// Why the room ended, for support and for the trainee's own screen.
   closeReason String?

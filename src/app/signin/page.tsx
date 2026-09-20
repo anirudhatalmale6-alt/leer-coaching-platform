@@ -1,11 +1,28 @@
 import { redirect } from "next/navigation";
 import { auth, signIn } from "@/auth";
 import { googleConfigured, devShortcutsEnabled } from "@/lib/env";
+import { safeNext } from "@/lib/redirects";
 import DevSignIn from "./dev-signin";
 
-export default async function SignIn() {
+export default async function SignIn({
+  searchParams,
+}: {
+  searchParams: Promise<{ next?: string }>;
+}) {
+  const { next } = await searchParams;
+
+  /**
+   * Send people back where they were going.
+   *
+   * Without this, a visitor who taps "Book video coaching" on a trainer's page
+   * signs in and lands on an empty dashboard, having lost the thing they came
+   * to do. They arrived from an Instagram bio; most will not find their way
+   * back. safeNext() keeps the destination inside the app - see redirects.ts.
+   */
+  const destination = safeNext(next);
+
   const session = await auth();
-  if (session?.user) redirect("/dashboard");
+  if (session?.user) redirect(destination);
 
   return (
     <main className="flex flex-1 items-center justify-center px-6 py-20">
@@ -24,7 +41,7 @@ export default async function SignIn() {
             className="mt-8"
             action={async () => {
               "use server";
-              await signIn("google", { redirectTo: "/dashboard" });
+              await signIn("google", { redirectTo: destination });
             }}
           >
             <button
@@ -41,7 +58,7 @@ export default async function SignIn() {
           </div>
         )}
 
-        {devShortcutsEnabled && <DevSignIn />}
+        {devShortcutsEnabled && <DevSignIn next={destination} />}
       </div>
     </main>
   );

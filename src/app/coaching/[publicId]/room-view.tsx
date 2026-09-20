@@ -18,6 +18,7 @@ type Props = {
   videoUrl: string | null;
   deliverDueAt: string | null;
   annotations: string | null;
+  focusNote: string | null;
 };
 
 function money(cents: number, currency: string) {
@@ -115,6 +116,17 @@ export default function RoomView(props: Props) {
             </p>
           </div>
         </div>
+
+        {/* What the trainee asked the coach to look at. Shown to both, so the
+            trainee can see the brief their coach is working to. */}
+        {props.focusNote && (
+          <div className="mt-6 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4">
+            <p className="text-xs font-semibold tracking-[0.2em] text-[var(--muted)]">
+              {props.isTrainer ? "WHAT THEY ASKED YOU TO LOOK AT" : "WHAT YOU ASKED FOR"}
+            </p>
+            <p className="mt-2 whitespace-pre-wrap text-sm">{props.focusNote}</p>
+          </div>
+        )}
 
         {status === "awaiting_delivery" && (
           <div

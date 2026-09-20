@@ -73,6 +73,7 @@ export default async function CoachingRoomPage({
       videoUrl={videoUrl}
       deliverDueAt={room.deliverDueAt?.toISOString() ?? null}
       annotations={room.annotations}
+      focusNote={room.focusNote}
     />
   );
 }

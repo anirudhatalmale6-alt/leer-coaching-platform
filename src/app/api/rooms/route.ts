@@ -1,15 +1,24 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/auth";
+import { prisma } from "@/lib/prisma";
 import { RoomError, createRoom } from "@/lib/rooms";
+import { normaliseFocusNote } from "@/lib/profile";
 
+/**
+ * Trainee books a coaching pass: opens the room and returns a hosted Checkout
+ * URL to pay on.
+ *
+ * NOTE what is NOT in this body: the price. The trainer's profile decides what
+ * their coaching costs, and it is read server-side in createRoom. A price
+ * accepted from here would let a buyer name their own.
+ */
 const Body = z.object({
-  trainerId: z.string().min(1),
+  trainerUsername: z.string().min(1).max(40),
   videoKey: z.string().min(1).max(400),
-  priceCents: z.number().int(),
+  focusNote: z.string().max(2000).optional(),
 });
 
-/** Trainee buys a coaching pass: authorises the card and opens the room. */
 export async function POST(req: Request) {
   const session = await auth();
   if (!session?.user?.id) {
@@ -27,14 +36,27 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "That clip is not yours." }, { status: 403 });
   }
 
+  const note = normaliseFocusNote(parsed.data.focusNote ?? "");
+  if (!note.ok) {
+    return NextResponse.json({ error: note.reason }, { status: 422 });
+  }
+
+  const trainer = await prisma.user.findUnique({
+    where: { username: parsed.data.trainerUsername.toLowerCase() },
+    select: { id: true },
+  });
+  if (!trainer) {
+    return NextResponse.json({ error: "That coach was not found." }, { status: 404 });
+  }
+
   try {
-    const { room, clientSecret } = await createRoom({
+    const { room, checkoutUrl } = await createRoom({
       traineeId: session.user.id,
-      trainerId: parsed.data.trainerId,
+      trainerId: trainer.id,
       videoKey: parsed.data.videoKey,
-      priceCents: parsed.data.priceCents,
+      focusNote: note.value,
     });
-    return NextResponse.json({ publicId: room.publicId, clientSecret });
+    return NextResponse.json({ publicId: room.publicId, checkoutUrl });
   } catch (err) {
     if (err instanceof RoomError) {
       return NextResponse.json({ error: err.message }, { status: err.status });

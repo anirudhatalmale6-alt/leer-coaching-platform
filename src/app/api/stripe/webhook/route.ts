@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getStripe } from "@/lib/stripe";
 import { applyConnectStatus, readStatus } from "@/lib/connect";
-import { markPaid } from "@/lib/rooms";
+import { cancelAbandonedCheckout, markPaid } from "@/lib/rooms";
 import { stripeWebhookConfigured } from "@/lib/env";
 
 /**
@@ -154,13 +154,26 @@ export async function POST(req: Request) {
       const pi = event.data?.object as { id?: string; metadata?: Record<string, string> } | undefined;
       const roomId = pi?.metadata?.leerRoomId;
       if (roomId) {
-        await markPaid(roomId);
+        // The PaymentIntent id is passed through because Checkout creates it,
+        // not us: this is the first point at which the room can record what to
+        // capture on delivery.
+        await markPaid(roomId, new Date(), pi?.id);
       } else if (pi?.id) {
         const room = await prisma.coachingRoom.findUnique({
           where: { paymentIntentId: pi.id },
         });
-        if (room) await markPaid(room.id);
+        if (room) await markPaid(room.id, new Date(), pi.id);
       }
+    }
+
+    /**
+     * The trainee opened Checkout and never paid. Close the room rather than
+     * leaving it in awaiting_payment forever. No money moved, so there is
+     * nothing to refund.
+     */
+    if (event.type === "checkout.session.expired") {
+      const sessionObject = event.data?.object as { id?: string } | undefined;
+      if (sessionObject?.id) await cancelAbandonedCheckout(sessionObject.id);
     }
 
     // Unhandled types are acknowledged so Stripe stops retrying them.

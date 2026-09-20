@@ -365,6 +365,75 @@ Video uploads are capped at **under 60 seconds and 100MB** (confirmed with the
 client). At that size the whole clip decodes to frames in browser memory, which
 is what makes frame stepping instant in both directions.
 
-Not in scope for this build: trainer profile galleries and embeds, e-book/PDF
+Not in scope for Phase 1: trainer profile galleries and embeds, e-book/PDF
 sales, the tip feature, voice-recording feedback, the 72h revision flow, mutual
 cancel, and timeout-based auto-suspension.
+
+---
+
+## Phase 2, M1 - trainer profile, public sales page, booking
+
+The trainer fills in a profile on `/dashboard`; it renders at
+`leersports.com/<username>` as a single card, and its button leads to
+`/book/<username>`, which takes the clip and opens Stripe Checkout.
+
+- **Profile** - handle, one-line bio, specialty category, profile image, Instagram
+  and YouTube, up to five portfolio links, coaching price and an on/off toggle.
+- **Public page** - one card, no gallery, no navigation. Nearly all of its traffic
+  is a thumb on a phone arriving from a bio link.
+- **Booking** - upload first, pay second. A trainee who cannot upload has simply
+  not bought anything; one who pays first has a support ticket and a refund.
+
+### The price is server-side, and that is a fix not a detail
+
+`POST /api/rooms` used to accept `priceCents` **from the request body**, checked
+only against the platform's $30-$500 bounds. A buyer could book a $65 pass for
+$30 by editing the request, and every check would pass. The body no longer
+carries a price at all - it names the coach, and the server reads
+`coachingPriceCents` from that coach's row.
+
+Verified against Stripe rather than against our own database: two bookings sent
+with `priceCents: 3000` and `priceCents: 1` both produced Checkout Sessions with
+`amount_total: 6500`, the trainer's real price.
+
+### Checkout, not a card form
+
+`payment_intent_data.capture_method: "manual"` means Checkout produces exactly
+the authorised PaymentIntent the direct integration did, so delivery captures
+it, approval transfers 80%, and a timeout cancels it - the escrow machinery in
+`lib/escrow.ts` is untouched. What changes is that Stripe hosts the card page,
+handles SCA and 3-D Secure, and offers each country's payment methods, which
+matters for a platform whose selling point is that both sides can be anywhere.
+
+The PaymentIntent id arrives with the webhook rather than at creation, because
+Checkout mints it when the trainee reaches the payment step. `markPaid()` records
+it even when the room has already moved on, so an out-of-order or redelivered
+event cannot leave a paid room with nothing to capture.
+
+`checkout.session.expired` closes an abandoned booking instead of leaving it in
+`awaiting_payment` forever.
+
+### Two things the tests initially failed to catch
+
+Both were found by deliberately breaking the code and checking the suite went
+red - it did not.
+
+1. `normalisePortfolioUrl` rejected `javascript:alert(1)`, but only by accident:
+   that URL parses with an empty hostname, so the "must contain a dot" rule
+   caught it and the scheme check was never exercised. `javascript://evil.com/%0aalert(1)`
+   has a real hostname, and in JS the `//` comments out the rest of the line so
+   the payload after the newline still runs. It is now tested directly.
+2. The price parser's comment claimed `49.99 * 100` drifts. It does not - that
+   one is exact. `32.05 * 100` is `3204.9999999999995`, and Stripe rejects a
+   non-integer amount outright, so the coach's page would just stop taking
+   bookings with nothing to explain why. The test now sweeps every price in the
+   allowed range instead of spot-checking a value that happened to pass.
+
+### Sign-in now returns you to where you were going
+
+`/signin` ignored any return URL and always went to `/dashboard`, so a visitor
+who tapped "Book video coaching" from an Instagram bio signed in and landed on
+an empty dashboard, having lost what they came for. It now honours `?next=`,
+guarded by `safeNext()` - only a rooted in-app path survives, because an open
+redirect on a sign-in page is a phishing primitive, and these particular
+visitors are about to type card details.

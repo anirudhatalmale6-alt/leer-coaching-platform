@@ -99,10 +99,45 @@ export function validateUpload(input: {
   return { ok: true };
 }
 
+/**
+ * Profile images.
+ *
+ * Far smaller limit than a clip, and a much narrower type list: this file is
+ * rendered in an <img> on a public page, and SVG is a script execution vector
+ * when served from your own origin, so it is deliberately not allowed.
+ */
+export const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
+
+export const ALLOWED_IMAGE_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+] as const;
+
+export function validateAvatar(input: {
+  contentType: string;
+  size: number;
+}): UploadValidation {
+  if (!ALLOWED_IMAGE_TYPES.includes(input.contentType as (typeof ALLOWED_IMAGE_TYPES)[number])) {
+    return { ok: false, reason: "Use a JPEG, PNG or WebP image." };
+  }
+  if (!Number.isFinite(input.size) || input.size <= 0) {
+    return { ok: false, reason: "Invalid file size." };
+  }
+  if (input.size > MAX_AVATAR_BYTES) {
+    const mb = (input.size / 1024 / 1024).toFixed(1);
+    return { ok: false, reason: `That image is ${mb}MB. The limit is 5MB.` };
+  }
+  return { ok: true };
+}
+
 const EXT: Record<string, string> = {
   "video/mp4": "mp4",
   "video/webm": "webm",
   "video/quicktime": "mov",
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
 };
 
 /**
@@ -116,6 +151,24 @@ const EXT: Record<string, string> = {
 export function buildObjectKey(userId: string, contentType: string): string {
   const ext = EXT[contentType] ?? "bin";
   return `uploads/${userId}/${randomUUID()}.${ext}`;
+}
+
+/**
+ * Object key for a profile image.
+ *
+ * A separate `avatars/` prefix, not `uploads/`, because the two have different
+ * exposure: coaching footage is private to two people, while an avatar is
+ * served to anyone who opens the trainer's public page. Keeping them apart
+ * means a future bucket rule can treat them differently, and it keeps the
+ * ownership check on /api/rooms ("the key must start uploads/<buyer>/") from
+ * ever matching an image.
+ *
+ * Still a random UUID: overwriting a fixed key would leave the old image in
+ * every CDN and browser cache that had already seen it.
+ */
+export function buildAvatarKey(userId: string, contentType: string): string {
+  const ext = EXT[contentType] ?? "bin";
+  return `avatars/${userId}/${randomUUID()}.${ext}`;
 }
 
 /** A short-lived URL the browser PUTs the file straight to. */

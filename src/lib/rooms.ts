@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { prisma } from "./prisma";
 import { getStripe } from "./stripe";
+import { appUrl } from "./env";
 import {
   canTransition,
   deliveryDeadline,
@@ -61,6 +62,14 @@ async function advance(
 /**
  * Trainee buys a coaching pass.
  *
+ * THE PRICE IS READ FROM THE TRAINER'S PROFILE, NEVER FROM THE CALLER.
+ *
+ * This used to accept a priceCents argument that came from the request body,
+ * which meant a trainee could book a $50 pass for the $30 minimum just by
+ * editing the request. The only range check was that the number was within the
+ * platform's bounds - which $30 is. Now the browser says which coach, and the
+ * server decides what that costs.
+ *
  * The card is AUTHORISED, not charged. If the trainer never responds the
  * authorisation is cancelled and the trainee is never charged at all - no
  * refund fee, nothing on their statement to query.
@@ -69,14 +78,11 @@ export async function createRoom(params: {
   traineeId: string;
   trainerId: string;
   videoKey: string;
-  priceCents: number;
+  focusNote?: string;
 }) {
   const stripe = getStripe();
   if (!stripe) throw new RoomError("Payments are not configured.", 503);
 
-  if (!isValidPrice(params.priceCents)) {
-    throw new RoomError("That price is outside the allowed range.", 422);
-  }
   if (params.traineeId === params.trainerId) {
     throw new RoomError("You cannot buy your own coaching pass.", 422);
   }
@@ -85,11 +91,22 @@ export async function createRoom(params: {
   if (!trainer?.isTrainer || !trainer.stripeAccountId) {
     throw new RoomError("That coach is not accepting bookings.", 422);
   }
+  if (!trainer.coachingEnabled) {
+    throw new RoomError("This coach has paused new bookings.", 422);
+  }
   // Re-check at purchase time rather than trusting the cached role flag: a
   // trainer whose capability lapsed between listing and checkout must not be
   // able to take money that can never be transferred to them.
   if (trainer.stripeTransfersStatus !== "active") {
     throw new RoomError("That coach cannot receive payouts right now.", 422);
+  }
+
+  const priceCents = trainer.coachingPriceCents;
+  if (!isValidPrice(priceCents)) {
+    // Only reachable if the bounds were tightened after a profile was saved.
+    // Refusing is the safe side: charging an out-of-bounds price is worse than
+    // a coach finding their page temporarily unbookable.
+    throw new RoomError("This coach's price needs updating before they can be booked.", 422);
   }
 
   const room = await prisma.coachingRoom.create({
@@ -98,31 +115,67 @@ export async function createRoom(params: {
       traineeId: params.traineeId,
       trainerId: params.trainerId,
       videoKey: params.videoKey,
-      priceCents: params.priceCents,
+      priceCents,
+      focusNote: params.focusNote || null,
       status: "awaiting_payment",
     },
   });
 
-  const intent = await stripe.paymentIntents.create({
-    amount: params.priceCents,
-    currency: room.currency,
-    // Authorise now, capture when the trainer delivers.
-    capture_method: "manual",
-    // NOT application_fee_amount and NOT transfer_data: this is a separate
-    // charge on the platform. The trainer's 80% is a separate transfer later,
-    // and the 20% is simply what we do not transfer.
-    //
-    // payment_method_types is deliberately omitted so dynamic payment methods
-    // apply - Stripe picks what is relevant for each trainee.
-    metadata: { leerRoomId: room.id, leerPublicId: room.publicId },
-  });
+  /**
+   * Stripe Checkout, per the client's UI spec, with manual capture.
+   *
+   * The hosted page handles SCA, 3-D Secure and each country's payment methods
+   * without LEER holding card data or building a card form - which matters for
+   * a platform whose selling point is that trainers and trainees are anywhere.
+   *
+   * What it does NOT change is the escrow: `capture_method: manual` produces
+   * exactly the same authorised PaymentIntent the direct integration did, so
+   * delivery captures it, approval transfers 80%, and a timeout cancels it,
+   * all unchanged.
+   *
+   * NOT application_fee_amount and NOT transfer_data: this is a separate charge
+   * on the platform. The trainer's 80% is a separate transfer later, and the
+   * 20% is simply what we do not transfer.
+   */
+  const checkout = await stripe.checkout.sessions.create(
+    {
+      mode: "payment",
+      line_items: [
+        {
+          quantity: 1,
+          price_data: {
+            currency: room.currency,
+            unit_amount: priceCents,
+            product_data: {
+              name: `1:1 video coaching with ${trainer.name ?? trainer.username ?? "your coach"}`,
+              description: "Frame-by-frame video analysis delivered within 24 hours.",
+            },
+          },
+        },
+      ],
+      payment_intent_data: {
+        capture_method: "manual",
+        // The webhook finds the room from here. It is set on the PaymentIntent
+        // rather than only on the Session because amount_capturable_updated
+        // carries the PaymentIntent, not the Session.
+        metadata: { leerRoomId: room.id, leerPublicId: room.publicId },
+      },
+      metadata: { leerRoomId: room.id, leerPublicId: room.publicId },
+      client_reference_id: room.id,
+      success_url: `${appUrl}/coaching/${room.publicId}?paid=1`,
+      cancel_url: `${appUrl}/book/${trainer.username ?? ""}?cancelled=1`,
+    },
+    // A double-clicked booking button must not open two rooms and two
+    // authorisations on the same clip.
+    { idempotencyKey: `leer-checkout-${room.id}` },
+  );
 
   await prisma.coachingRoom.update({
     where: { id: room.id },
-    data: { paymentIntentId: intent.id },
+    data: { checkoutSessionId: checkout.id },
   });
 
-  return { room, clientSecret: intent.client_secret };
+  return { room, checkoutUrl: checkout.url };
 }
 
 /**
@@ -131,10 +184,51 @@ export async function createRoom(params: {
  * Driven by the webhook rather than the browser: a trainee who closes the tab
  * mid-redirect must still get their room.
  */
-export async function markPaid(roomId: string, paidAt = new Date()) {
-  return advance(roomId, "awaiting_payment", "awaiting_delivery", {
+export async function markPaid(
+  roomId: string,
+  paidAt = new Date(),
+  paymentIntentId?: string,
+) {
+  const moved = await advance(roomId, "awaiting_payment", "awaiting_delivery", {
     paidAt,
     deliverDueAt: deliveryDeadline(paidAt),
+    // Checkout mints the PaymentIntent, so this is the first moment the room
+    // learns its id - and delivery cannot capture without it.
+    ...(paymentIntentId ? { paymentIntentId } : {}),
+  });
+
+  /**
+   * Record the PaymentIntent even if the room had already moved on.
+   *
+   * Without this, a redelivered or out-of-order event leaves a paid room with
+   * no paymentIntentId and delivery fails with "this room has no payment" -
+   * money taken, work done, nothing capturable.
+   */
+  if (!moved && paymentIntentId) {
+    await prisma.coachingRoom.updateMany({
+      where: { id: roomId, paymentIntentId: null },
+      data: { paymentIntentId },
+    });
+  }
+
+  return moved;
+}
+
+/**
+ * The trainee abandoned the hosted payment page and Stripe expired it.
+ *
+ * Without this the room sits in awaiting_payment forever, showing up as a live
+ * booking to nobody's benefit. No money has moved, so there is nothing to
+ * refund.
+ */
+export async function cancelAbandonedCheckout(sessionId: string) {
+  const room = await prisma.coachingRoom.findUnique({
+    where: { checkoutSessionId: sessionId },
+  });
+  if (!room || room.status !== "awaiting_payment") return false;
+  return advance(room.id, "awaiting_payment", "cancelled", {
+    closedAt: new Date(),
+    closeReason: "checkout_abandoned",
   });
 }
 

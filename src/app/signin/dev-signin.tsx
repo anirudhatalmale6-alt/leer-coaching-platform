@@ -7,7 +7,7 @@ import { useRouter } from "next/navigation";
  * Rendered only when LEER_DEV_LOGIN=1 outside production. Lets the platform be
  * clicked through before Google OAuth credentials exist.
  */
-export default function DevSignIn() {
+export default function DevSignIn({ next }: { next: string }) {
   const router = useRouter();
   const [email, setEmail] = useState("trainer@example.com");
   const [busy, setBusy] = useState(false);
@@ -22,7 +22,7 @@ export default function DevSignIn() {
       body: JSON.stringify({ email }),
     });
     if (res.ok) {
-      router.push("/dashboard");
+      router.push(next);
       router.refresh();
     } else {
       setError("Dev sign-in failed");

@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { appUrl, stripeConfigured, devShortcutsEnabled } from "@/lib/env";
 import OnboardButton from "./onboard-button";
 import DevConnect from "./dev-connect";
+import ProfileEditor from "./profile-editor";
 
 function Row({ label, ok, note }: { label: string; ok: boolean; note?: string }) {
   return (
@@ -37,6 +38,7 @@ export default async function Dashboard({
 
   const user = await prisma.user.findUnique({
     where: { id: session.user.id },
+    include: { portfolioLinks: { orderBy: { position: "asc" }, select: { url: true } } },
   });
   if (!user) redirect("/signin");
 
@@ -110,17 +112,43 @@ export default async function Dashboard({
             {devShortcutsEnabled && <DevConnect />}
           </section>
         ) : (
-          <section className="mt-10 rounded-xl border border-[var(--accent)]/30 bg-[var(--accent)]/5 p-6">
-            <h2 className="text-lg font-semibold text-[var(--accent)]">
-              You are a Trainer
-            </h2>
-            <p className="mt-2 text-sm leading-relaxed text-[var(--muted)]">
-              Your public page is live at{" "}
-              <span className="text-[var(--foreground)]">{publicUrl}</span>.
-              Coaching passes, the analysis canvas and escrow payouts arrive in
-              milestones 2 and 3.
-            </p>
-          </section>
+          <>
+            <section className="mt-10 rounded-xl border border-[var(--accent)]/30 bg-[var(--accent)]/5 p-6">
+              <h2 className="text-lg font-semibold text-[var(--accent)]">
+                You are a Trainer
+              </h2>
+              <p className="mt-2 text-sm leading-relaxed text-[var(--muted)]">
+                Your public page is live at{" "}
+                <a
+                  href={`/${user.username}`}
+                  className="text-[var(--foreground)] underline underline-offset-4"
+                >
+                  {publicUrl}
+                </a>
+                . That is the link to put in your Instagram or YouTube bio.
+              </p>
+            </section>
+
+            <div className="mt-8">
+              <ProfileEditor
+                appHost={appUrl.replace(/^https?:\/\//, "")}
+                payoutsActive={user.stripeTransfersStatus === "active"}
+                initial={{
+                  username: user.username ?? "",
+                  bio: user.bio ?? "",
+                  category: user.category ?? "",
+                  instagram: user.instagram ?? "",
+                  youtube: user.youtube ?? "",
+                  // Sent as the string the input holds, so the form round-trips
+                  // what the trainer typed rather than reformatting it under them.
+                  price: (user.coachingPriceCents / 100).toFixed(2),
+                  coachingEnabled: user.coachingEnabled,
+                  portfolio: user.portfolioLinks.map((l) => l.url),
+                  hasAvatar: Boolean(user.avatarKey),
+                }}
+              />
+            </div>
+          </>
         )}
 
         <section className="mt-8 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-6">

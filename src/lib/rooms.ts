@@ -78,6 +78,7 @@ export async function createRoom(params: {
   traineeId: string;
   trainerId: string;
   videoKey: string;
+  videoCodec?: string;
   focusNote?: string;
 }) {
   const stripe = getStripe();
@@ -115,6 +116,7 @@ export async function createRoom(params: {
       traineeId: params.traineeId,
       trainerId: params.trainerId,
       videoKey: params.videoKey,
+      videoCodec: params.videoCodec ?? null,
       priceCents,
       focusNote: params.focusNote || null,
       status: "awaiting_payment",

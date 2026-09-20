@@ -21,14 +21,19 @@ export default function BookingFlow({
   priceLabel: string;
 }) {
   const [videoKey, setVideoKey] = useState<string | null>(null);
+  const [codec, setCodec] = useState<string | undefined>(undefined);
   const [focusNote, setFocusNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const onUploaded = useCallback(({ key }: { key: string }) => {
-    setVideoKey(key);
-    setError(null);
-  }, []);
+  const onUploaded = useCallback(
+    ({ key, codec: detected }: { key: string; codec?: string }) => {
+      setVideoKey(key);
+      setCodec(detected);
+      setError(null);
+    },
+    [],
+  );
 
   async function proceed() {
     if (!videoKey) return;
@@ -38,7 +43,7 @@ export default function BookingFlow({
       const res = await fetch("/api/rooms", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ trainerUsername: username, videoKey, focusNote }),
+        body: JSON.stringify({ trainerUsername: username, videoKey, focusNote, codec }),
       });
       const data = (await res.json()) as { checkoutUrl?: string; error?: string };
       if (res.ok && data.checkoutUrl) {

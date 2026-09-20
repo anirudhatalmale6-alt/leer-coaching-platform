@@ -5,6 +5,10 @@ import { appUrl, stripeConfigured, devShortcutsEnabled } from "@/lib/env";
 import OnboardButton from "./onboard-button";
 import DevConnect from "./dev-connect";
 import ProfileEditor from "./profile-editor";
+import PayoutBanner from "./payout-banner";
+import ActiveRequests from "./active-requests";
+import { getPayoutDestination } from "@/lib/connect";
+import { settleIfExpired } from "@/lib/rooms";
 
 function Row({ label, ok, note }: { label: string; ok: boolean; note?: string }) {
   return (
@@ -41,6 +45,53 @@ export default async function Dashboard({
     include: { portfolioLinks: { orderBy: { position: "asc" }, select: { url: true } } },
   });
   if (!user) redirect("/signin");
+
+  /**
+   * The coach's queue, and the payout destination behind the banner.
+   *
+   * Only fetched for trainers: a trainee has no Stripe account, and calling
+   * Stripe on every dashboard render for nothing would put a network round
+   * trip in front of every page load.
+   */
+  let activeRequests: {
+    publicId: string;
+    traineeName: string;
+    status: string;
+    priceCents: number;
+    currency: string;
+    deliverDueAt: string | null;
+  }[] = [];
+  let payout: Awaited<ReturnType<typeof getPayoutDestination>> = null;
+
+  if (user.isTrainer) {
+    const rooms = await prisma.coachingRoom.findMany({
+      where: { trainerId: user.id, status: { in: ["awaiting_delivery", "delivered"] } },
+      orderBy: { deliverDueAt: "asc" },
+      include: { trainee: { select: { name: true, email: true } } },
+    });
+
+    // Settle anything already past its deadline before listing it, so a coach
+    // is never shown a job they can no longer be paid for. Cheap and a no-op
+    // unless a room is genuinely expired - see settleIfExpired().
+    const live = [];
+    for (const room of rooms) {
+      if (room.status === "awaiting_delivery" && (await settleIfExpired(room))) continue;
+      live.push(room);
+    }
+
+    activeRequests = live.map((room) => ({
+      publicId: room.publicId,
+      traineeName: room.trainee.name ?? room.trainee.email?.split("@")[0] ?? "Trainee",
+      status: room.status,
+      priceCents: room.priceCents,
+      currency: room.currency,
+      deliverDueAt: room.deliverDueAt?.toISOString() ?? null,
+    }));
+
+    if (user.stripeAccountId) {
+      payout = await getPayoutDestination(user.stripeAccountId);
+    }
+  }
 
   const publicUrl = user.username
     ? `${appUrl.replace(/^https?:\/\//, "")}/${user.username}`
@@ -130,6 +181,21 @@ export default async function Dashboard({
             </section>
 
             <div className="mt-8">
+              <PayoutBanner
+                transfersStatus={user.stripeTransfersStatus}
+                payoutsBlocked={user.stripePayoutsStatus !== "active"}
+                country={user.stripeCountry}
+                bankName={payout?.bankName ?? null}
+                last4={payout?.last4 ?? null}
+                hasAccount={Boolean(user.stripeAccountId)}
+              />
+            </div>
+
+            <div className="mt-6">
+              <ActiveRequests requests={activeRequests} />
+            </div>
+
+            <div className="mt-6">
               <ProfileEditor
                 appHost={appUrl.replace(/^https?:\/\//, "")}
                 payoutsActive={user.stripeTransfersStatus === "active"}

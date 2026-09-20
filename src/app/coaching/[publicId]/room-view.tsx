@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import AnalysisCanvas from "@/components/canvas/AnalysisCanvas";
 import type { RoomStatus } from "@/lib/escrow";
+import { browserCanPlay } from "@/lib/video/codec";
 
 type Props = {
   publicId: string;
@@ -19,6 +20,7 @@ type Props = {
   deliverDueAt: string | null;
   annotations: string | null;
   focusNote: string | null;
+  videoCodec: string | null;
 };
 
 function money(cents: number, currency: string) {
@@ -57,6 +59,29 @@ export default function RoomView(props: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const countdown = useCountdown(props.deliverDueAt);
+
+  /**
+   * Will THIS browser decode the clip?
+   *
+   * Asked here rather than at upload because the answer that matters is the
+   * one on the coach's machine. Chrome's HEVC support depends on the hardware
+   * decoder, so the same clip opens on one laptop and shows a black rectangle
+   * on another - and without this the coach has no way to tell a broken clip
+   * from a broken platform.
+   *
+   * In an effect, not during render: canPlayType needs a DOM, and calling it
+   * while rendering guarantees a server/client hydration mismatch.
+   */
+  const [codecUnsupported, setCodecUnsupported] = useState(false);
+  useEffect(() => {
+    if (!props.videoCodec) return;
+    const supported = browserCanPlay({
+      codec: props.videoCodec as Parameters<typeof browserCanPlay>[0]["codec"],
+      fourcc: null,
+      risky: false,
+    });
+    setCodecUnsupported(supported === false);
+  }, [props.videoCodec]);
 
   const act = useCallback(
     async (what: "deliver" | "approve") => {
@@ -163,6 +188,15 @@ export default function RoomView(props: Props) {
           <div className="mt-6 rounded-lg border border-[var(--warn)]/40 bg-[var(--warn)]/10 p-4 text-sm text-[var(--warn)]">
             The coach did not deliver in time. The authorisation was cancelled -
             the trainee was never charged, so there is nothing to refund.
+          </div>
+        )}
+
+        {codecUnsupported && (
+          <div className="mt-6 rounded-lg border border-[var(--warn)]/40 bg-[var(--warn)]/10 p-4 text-sm text-[var(--warn)]">
+            This clip is {props.videoCodec === "hevc" ? "HEVC (H.265)" : props.videoCodec},
+            which this browser cannot decode - the video below will very likely
+            be black. Open this page in Safari, or on a Mac or iPhone, and it
+            will play. Nothing is wrong with the file or the upload.
           </div>
         )}
 

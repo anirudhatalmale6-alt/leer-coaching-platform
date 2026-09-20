@@ -49,6 +49,9 @@ model User {
   /// creation, so it is recorded for support rather than re-derived.
   stripeCountry                 String?
   stripeTransfersStatus         String?
+  /// `stripe_balance.payouts`. Reported to the trainer, never used to gate a
+  /// booking - see ConnectStatus in lib/connect.ts.
+  stripePayoutsStatus           String?
   stripeRequirementsOutstanding Boolean   @default(false)
   stripeSyncedAt                DateTime?
 
@@ -163,6 +166,11 @@ model CoachingRoom {
 
   /// R2 object key of the clip the trainee uploaded.
   videoKey String
+
+  /// Detected at upload, from the file's own sample entry - "hevc", "h264"...
+  /// Recorded so the coach's room can explain a black screen instead of
+  /// leaving them to guess, and so support can see it after the fact.
+  videoCodec String?
 
   /// Money is stored in the smallest currency unit, as an integer. Never a
   /// float - 0.1 + 0.2 is not 0.3, and this is somebody's payout.

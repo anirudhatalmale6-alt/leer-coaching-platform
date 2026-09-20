@@ -30,6 +30,10 @@ export default function DevConnect() {
   const cases: { label: string; body: Record<string, unknown> }[] = [
     { label: "Fully onboarded", body: { transfersStatus: "active" } },
     {
+      label: "Earning, bank still verifying",
+      body: { transfersStatus: "active", payoutsStatus: "restricted" },
+    },
+    {
       label: "Form done, still verifying",
       body: { transfersStatus: "restricted", requirementsOutstanding: true },
     },

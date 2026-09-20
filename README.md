@@ -483,3 +483,90 @@ an empty dashboard, having lost what they came for. It now honours `?next=`,
 guarded by `safeNext()` - only a rooted in-app path survives, because an open
 redirect on a sign-in page is a phishing primitive, and these particular
 visitors are about to type card details.
+
+---
+
+## Phase 2, M4 - the codec guard and the trainer's queue
+
+### The problem this solves
+
+An iPhone set to "High Efficiency" - the default - records **HEVC (H.265)**
+inside a `.mov`. Safari plays it. Chrome and Firefox are inconsistent, because
+support depends on the machine's hardware decoder, so the same clip opens on
+one laptop and is a black rectangle on another.
+
+The failure is silent and it lands on the wrong person: the trainee films and
+uploads happily, and the **coach** opens a black screen with 24 hours to
+deliver feedback on it. Transcoding was ruled out of scope, so the answer is to
+detect it at upload and tell the trainee how to fix it.
+
+### Why it reads the file rather than asking the browser
+
+- **Not the extension.** A `.mov` can hold H.264 and play everywhere; an `.mp4`
+  can hold HEVC and not. Warning on `.mov` would nag people whose files are
+  fine and miss files that are broken.
+- **Not `canPlayType`.** That answers for the browser doing the asking. A
+  trainee uploading from an iPhone is on Safari, which says yes - and their
+  coach is the one who cannot open it.
+
+MP4 and MOV are both ISO base media format: a tree of boxes, each a 4-byte size
+then a 4-byte type. The codec is the sample entry's type inside
+`moov > trak > mdia > minf > stbl > stsd`. Reading it is a walk, not a decode -
+no library, no cost, and it works for formats this browser cannot play.
+
+`detectCodecFromFile` walks the top-level boxes with `File.slice`, so finding
+`moov` in a 100MB clip is a handful of small reads.
+
+### Two things real files taught the tests
+
+Fixtures in `tests/fixtures/` are produced by ffmpeg and confirmed with
+ffprobe, not hand-written byte arrays.
+
+1. **`moov` is usually at the END.** Every `.mov` ffmpeg produces here writes
+   the metadata after the media data, and so do iPhones. "Read the first
+   megabyte and look" finds nothing on precisely the clips this feature exists
+   for.
+2. **Order of operations.** The first version probed the clip for its duration
+   before checking the codec - and `probe()` asks the browser to decode it. On
+   an HEVC file in Chrome that throws, so the trainee got "That file could not
+   be read as a video" and the codec check never ran. The most common real
+   failure produced the least useful message possible. The unit tests all
+   passed; driving a real browser is what caught it. The codec check now runs
+   first, and its answer explains the probe failure.
+
+Duration is therefore optional now: when the browser cannot decode a clip it
+cannot measure it either, and refusing the upload for that would punish the
+trainee for their coach's browser. Size and type are still enforced server-side.
+
+### What the coach sees
+
+The detected codec is stored on the room, and if the coach's own browser cannot
+decode it the room says so plainly - "this will be black, open it in Safari" -
+instead of leaving them to wonder whether the platform is broken.
+
+### Dashboard completion
+
+- **Payout banner** - transfers status, payout destination with the bank's last
+  four digits, and a link into the trainer's Stripe Express dashboard.
+- **Active coaching requests** - every room with money in escrow waiting on
+  this coach, with the 24 hour countdown, going amber under three hours.
+  Anything already past its deadline is settled before the list renders, so a
+  coach is never shown a job they can no longer be paid for.
+
+Three things here were verified against the live Stripe test API rather than
+assumed, because the local reference only documents v1:
+
+1. `accounts.createLoginLink` **does** work for a v2 `dashboard: "express"`
+   account. It fails with *"Cannot create a login link for an account that has
+   not completed onboarding"* - which is a **state** error, not a capability
+   error, so the UI sends the trainer back to finish onboarding rather than
+   reporting the feature as unavailable.
+2. `accounts.listExternalAccounts` works on a v2 account and returns an empty
+   list until a bank is attached. That is a normal state; the banner says "no
+   bank account added yet".
+3. The recipient configuration exposes **`payouts` as well as
+   `stripe_transfers`**, which the original code did not read. They are shown
+   separately and on purpose: a coach whose transfers are active but whose bank
+   is still being verified is genuinely earning, and collapsing the two would
+   make a working account look broken. `qualifiesAsTrainer` still depends on
+   transfers alone.

@@ -98,6 +98,16 @@ const RECIPIENT_CONFIG = {
 export type ConnectStatus = {
   /** `stripe_balance.stripe_transfers` capability status. */
   transfersStatus: string | null;
+  /**
+   * `stripe_balance.payouts` capability status.
+   *
+   * Deliberately separate from transfers and deliberately NOT part of
+   * qualifying as a trainer. A coach whose transfers are active but whose
+   * payouts are still being verified can be booked and is genuinely earning -
+   * the money is landing in their Stripe balance. Gating bookings on this
+   * would take a working coach off the platform for a bank check.
+   */
+  payoutsStatus: string | null;
   /** Whether Stripe is still asking the trainer for information. */
   requirementsOutstanding: boolean;
 };
@@ -109,6 +119,7 @@ type V2Account = {
       capabilities?: {
         stripe_balance?: {
           stripe_transfers?: { status?: string; status_details?: unknown[] };
+          payouts?: { status?: string; status_details?: unknown[] };
         };
       };
     };
@@ -118,11 +129,11 @@ type V2Account = {
 };
 
 export function readStatus(account: V2Account): ConnectStatus {
-  const transfers =
-    account.configuration?.recipient?.capabilities?.stripe_balance?.stripe_transfers;
+  const balance = account.configuration?.recipient?.capabilities?.stripe_balance;
   const entries = account.requirements?.entries;
   return {
-    transfersStatus: transfers?.status ?? null,
+    transfersStatus: balance?.stripe_transfers?.status ?? null,
+    payoutsStatus: balance?.payouts?.status ?? null,
     requirementsOutstanding: Array.isArray(entries) ? entries.length > 0 : false,
   };
 }
@@ -325,6 +336,7 @@ export async function applyConnectStatus(userId: string, status: ConnectStatus) 
     where: { id: user.id },
     data: {
       stripeTransfersStatus: status.transfersStatus,
+      stripePayoutsStatus: status.payoutsStatus,
       stripeRequirementsOutstanding: status.requirementsOutstanding,
       stripeSyncedAt: new Date(),
       isTrainer: nowTrainer,
@@ -334,6 +346,66 @@ export async function applyConnectStatus(userId: string, status: ConnectStatus) 
       username,
     },
   });
+}
+
+/**
+ * Where a trainer's money actually lands, for the dashboard payout banner.
+ *
+ * Verified against the live test API rather than assumed: `listExternalAccounts`
+ * DOES work for an Accounts v2 connected account. It returns an empty list
+ * until the trainer has attached a bank, which is a normal state and not an
+ * error - the banner says "not added yet" rather than showing nothing.
+ */
+export type PayoutDestination = {
+  bankName: string | null;
+  last4: string | null;
+  currency: string | null;
+};
+
+export async function getPayoutDestination(
+  accountId: string,
+): Promise<PayoutDestination | null> {
+  const stripe = getStripe();
+  if (!stripe) return null;
+
+  // The dev simulation hands out placeholder ids that do not exist at Stripe.
+  // Asking about them logs a real-looking error on every dashboard render and
+  // trains you to ignore the log - which is where genuine failures go to die.
+  if (accountId.startsWith("acct_dev_")) return null;
+
+  try {
+    const accounts = await stripe.accounts.listExternalAccounts(accountId, { limit: 1 });
+    const first = accounts.data[0] as
+      | { object?: string; bank_name?: string | null; last4?: string | null; currency?: string | null }
+      | undefined;
+    if (!first) return null;
+    return {
+      bankName: first.bank_name ?? null,
+      last4: first.last4 ?? null,
+      currency: first.currency ?? null,
+    };
+  } catch (err) {
+    // A payout destination is decoration on a banner. It must never be able to
+    // take the dashboard down with it.
+    console.error("[connect] could not read payout destination", err);
+    return null;
+  }
+}
+
+/**
+ * A link into the trainer's own Stripe Express dashboard.
+ *
+ * Confirmed working for v2 `dashboard: "express"` accounts. The one failure to
+ * expect is "Cannot create a login link for an account that has not completed
+ * onboarding" - which is a STATE error, not a capability error, so the caller
+ * should send the trainer back to onboarding rather than concluding the
+ * feature is unavailable.
+ */
+export async function createDashboardLink(accountId: string): Promise<string | null> {
+  const stripe = getStripe();
+  if (!stripe) return null;
+  const link = await stripe.accounts.createLoginLink(accountId);
+  return link.url;
 }
 
 /** Kept for the webhook, which receives a Stripe.Event of unknown shape. */

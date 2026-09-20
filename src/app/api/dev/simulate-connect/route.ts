@@ -28,6 +28,7 @@ export async function POST(req: Request) {
 
   const body = (await req.json().catch(() => ({}))) as {
     transfersStatus?: string;
+    payoutsStatus?: string;
     requirementsOutstanding?: boolean;
   };
 
@@ -43,6 +44,9 @@ export async function POST(req: Request) {
 
   const updated = await applyConnectStatus(session.user.id, {
     transfersStatus: body.transfersStatus ?? "active",
+    // Mirrors the real thing: Stripe usually turns transfers on before it has
+    // finished verifying where to pay out to.
+    payoutsStatus: body.payoutsStatus ?? body.transfersStatus ?? "active",
     requirementsOutstanding: body.requirementsOutstanding ?? false,
   });
 

@@ -17,6 +17,10 @@ const Body = z.object({
   trainerUsername: z.string().min(1).max(40),
   videoKey: z.string().min(1).max(400),
   focusNote: z.string().max(2000).optional(),
+  // Advisory, from the browser's own inspection of the file. Only ever used to
+  // explain a playback problem to the coach, never to gate anything, so an
+  // unrecognised value is harmless - but keep it to a short known set anyway.
+  codec: z.enum(["h264", "hevc", "av1", "vp9", "vp8", "mpeg4", "prores"]).optional(),
 });
 
 export async function POST(req: Request) {
@@ -54,6 +58,7 @@ export async function POST(req: Request) {
       traineeId: session.user.id,
       trainerId: trainer.id,
       videoKey: parsed.data.videoKey,
+      videoCodec: parsed.data.codec,
       focusNote: note.value,
     });
     return NextResponse.json({ publicId: room.publicId, checkoutUrl });

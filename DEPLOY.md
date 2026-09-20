@@ -53,6 +53,37 @@ Before the platform holds real customer data, generate a Postgres migration
 baseline and switch the build back to `migrate deploy`, so schema changes are
 reviewable and reversible. `db push` will happily drop a column.
 
+### When the build stops with "there might be data loss"
+
+`db push` refuses to guess. This is the guard doing its job and it must not be
+silenced by adding `--accept-data-loss` to the build command - that hands every
+future deploy a blank cheque, including the one that really would drop a column.
+
+Review the change and apply it deliberately instead. `migrate diff` is read-only
+and prints exactly what the live database is missing:
+
+```
+npx prisma migrate diff \
+  --from-url "$DATABASE_URL" \
+  --to-schema-datamodel prisma/schema.postgres.prisma --script
+```
+
+If every statement is additive - `ADD COLUMN`, `CREATE TABLE`, `CREATE INDEX`,
+`ADD CONSTRAINT ... FOREIGN KEY` - it is safe to apply:
+
+```
+npx prisma migrate diff ... --script > change.sql
+npx prisma db execute --url "$DATABASE_URL" --file change.sql
+```
+
+Re-run the diff afterwards; "This is an empty migration" means the live schema
+now matches, and the next deploy's `db push` is a no-op.
+
+This happened on the P2-M1 deploy. The warning was a unique index on
+`CoachingRoom.checkoutSessionId` - a brand-new column, NULL in every existing
+row, and Postgres permits unlimited NULLs in a unique index, so it could not
+have failed. Worth checking rather than assuming, which is the point.
+
 ## 3. Environment variables
 
 Set these in Vercel (Project → Settings → Environment Variables):

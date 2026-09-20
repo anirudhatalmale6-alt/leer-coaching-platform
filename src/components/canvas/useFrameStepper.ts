@@ -6,6 +6,7 @@ import {
   clampFrame,
   estimateFps,
   frameToTime,
+  resolvePausedFrame,
   timeToFrame,
   totalFrames,
 } from "@/lib/canvas/frames";
@@ -54,6 +55,13 @@ export function useFrameStepper(videoRef: React.RefObject<HTMLVideoElement | nul
   // stretch of playback rather than assumed.
   const sampleRef = useRef<{ mediaTime: number; presentedFrames: number } | null>(null);
 
+  /**
+   * The last frame the compositor actually PRESENTED, from
+   * requestVideoFrameCallback. Distinct from frameRef, which is what the coach
+   * asked for - on pause it is the presented frame that is on screen.
+   */
+  const presentedFrameRef = useRef<number | null>(null);
+
   const onLoadedMetadata = useCallback(() => {
     const v = videoRef.current;
     if (!v) return;
@@ -100,6 +108,8 @@ export function useFrameStepper(videoRef: React.RefObject<HTMLVideoElement | nul
       if (!v || !v.duration) return;
       const next = clampFrame(target, v.duration, fpsRef.current);
       frameRef.current = next;
+      // An explicit seek supersedes whatever was last presented.
+      presentedFrameRef.current = null;
       v.currentTime = frameToTime(next, fpsRef.current);
       setFrame(next);
     },
@@ -113,9 +123,13 @@ export function useFrameStepper(videoRef: React.RefObject<HTMLVideoElement | nul
       if (!v.paused) {
         v.pause();
         setPlaying(false);
-        // Playback has been advancing frameRef; resume stepping from whatever
-        // is actually on screen.
-        frameRef.current = timeToFrame(v.currentTime, fpsRef.current);
+        // Same trap as togglePlay: resume stepping from the frame actually on
+        // screen, not from the lagging playback clock.
+        frameRef.current = resolvePausedFrame({
+          presentedFrame: presentedFrameRef.current,
+          currentTime: v.currentTime,
+          fps: fpsRef.current,
+        });
       }
       seekToFrame(frameRef.current + delta);
     },
@@ -131,11 +145,20 @@ export function useFrameStepper(videoRef: React.RefObject<HTMLVideoElement | nul
     } else {
       v.pause();
       setPlaying(false);
-      // Snap to the frame actually on screen, so stepping continues from what
-      // the coach is looking at rather than a fractional time.
-      const shown = timeToFrame(v.currentTime, fpsRef.current);
+
+      // Snap to the frame actually ON SCREEN. video.currentTime is the playback
+      // clock and lags the presented frame, so using it showed one frame behind
+      // what the coach was looking at. See resolvePausedFrame().
+      const shown = resolvePausedFrame({
+        presentedFrame: presentedFrameRef.current,
+        currentTime: v.currentTime,
+        fps: fpsRef.current,
+      });
       frameRef.current = shown;
       setFrame(shown);
+      // Re-seek so currentTime agrees with the displayed frame, keeping the
+      // next step deterministic.
+      v.currentTime = frameToTime(shown, fpsRef.current);
     }
   }, [videoRef]);
 
@@ -150,12 +173,15 @@ export function useFrameStepper(videoRef: React.RefObject<HTMLVideoElement | nul
     const onFrame = (_now: number, meta: { mediaTime: number; presentedFrames: number }) => {
       if (cancelled) return;
 
-      // Only follow presentation during playback. After a seek the callback
-      // also fires, reporting the decoded frame's own start time - which can
-      // round to the frame below the one that was requested and would drag the
-      // readout backwards a frame every single step.
+      // Record the presented frame ALWAYS - pause reads it even though the
+      // readout below only follows presentation during playback. After a seek
+      // this callback also fires, reporting the decoded frame's own start time,
+      // which is why the readout itself is gated on !paused: otherwise it would
+      // drag backwards a frame on every step.
+      presentedFrameRef.current = timeToFrame(meta.mediaTime, fpsRef.current);
+
       if (!v.paused) {
-        const shown = timeToFrame(meta.mediaTime, fpsRef.current);
+        const shown = presentedFrameRef.current;
         frameRef.current = shown;
         setFrame(shown);
 

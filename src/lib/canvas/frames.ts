@@ -92,3 +92,36 @@ export function hasFrameCallback(): boolean {
     "requestVideoFrameCallback" in HTMLVideoElement.prototype
   );
 }
+
+/**
+ * Which frame to show as "current" when playback is paused.
+ *
+ * `video.currentTime` is the playback CLOCK, and it lags the frame the
+ * compositor has actually put on screen. Deriving the paused frame from it
+ * reports one frame BEHIND what the coach is looking at - reproduced on the
+ * live build: the clip displayed FRAME 0081 (t=2.700) while the counter read
+ * frame 0080 (2.667).
+ *
+ * requestVideoFrameCallback reports the mediaTime of the frame genuinely being
+ * presented, so that value wins whenever we have one. The clock is only a
+ * fallback for browsers without rVFC, where it is the best available.
+ *
+ * NOTE this is not an off-by-one in indexing. Stepping and seeking were and
+ * are exact; adding 1 everywhere would have broken them. Only the pause path
+ * read from the wrong source.
+ */
+export function resolvePausedFrame(opts: {
+  presentedFrame: number | null;
+  currentTime: number;
+  fps: number;
+}): number {
+  const { presentedFrame, currentTime, fps } = opts;
+  if (
+    presentedFrame !== null &&
+    Number.isInteger(presentedFrame) &&
+    presentedFrame >= 0
+  ) {
+    return presentedFrame;
+  }
+  return timeToFrame(currentTime, fps);
+}

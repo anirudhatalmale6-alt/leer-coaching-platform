@@ -14,6 +14,7 @@ import {
   estimateFps,
   formatTimecode,
   frameToTime,
+  resolvePausedFrame,
   timeToFrame,
   totalFrames,
 } from "../src/lib/canvas/frames";
@@ -223,5 +224,51 @@ describe("estimateFps - regression: samples taken across a seek", () => {
       estimateFps({ mediaTime: 1.0, presentedFrames: 100 }, { mediaTime: 1.5, presentedFrames: 105 }),
       10,
     );
+  });
+});
+
+describe("resolvePausedFrame - the pause off-by-one the client found", () => {
+  test("prefers the PRESENTED frame over the lagging playback clock", () => {
+    // The live reproduction: the clip displayed FRAME 0081 (mediaTime 2.700)
+    // while video.currentTime still read ~2.68, which floors to 80. The counter
+    // must report what is on screen.
+    assert.equal(
+      resolvePausedFrame({ presentedFrame: 81, currentTime: 2.68, fps: 30 }),
+      81,
+    );
+  });
+
+  test("falls back to the clock when no frame has been presented", () => {
+    // Browsers without requestVideoFrameCallback never report a presented
+    // frame; there the clock is the best available signal.
+    assert.equal(
+      resolvePausedFrame({ presentedFrame: null, currentTime: 2.7, fps: 30 }),
+      81,
+    );
+  });
+
+  test("ignores a nonsense presented value rather than trusting it", () => {
+    for (const bad of [-1, 1.5, Number.NaN]) {
+      assert.equal(
+        resolvePausedFrame({ presentedFrame: bad, currentTime: 2.7, fps: 30 }),
+        81,
+        `should have fallen back for ${bad}`,
+      );
+    }
+  });
+
+  test("frame 0 is a real frame, not a falsy value to skip", () => {
+    assert.equal(
+      resolvePausedFrame({ presentedFrame: 0, currentTime: 5, fps: 30 }),
+      0,
+    );
+  });
+
+  test("this is NOT a constant index shift - stepping stays exact", () => {
+    // Guard against 'fixing' the report by adding 1 everywhere. Seek/step maths
+    // was always correct and must stay correct.
+    for (const f of [0, 7, 80, 299]) {
+      assert.equal(timeToFrame(frameToTime(f, 30), 30), f);
+    }
   });
 });

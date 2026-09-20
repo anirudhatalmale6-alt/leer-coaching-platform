@@ -23,14 +23,32 @@ export const dynamic = "force-dynamic";
 /** Bounded so one sweep cannot run unboundedly long on a serverless timeout. */
 const MAX_PER_RUN = 100;
 
-function authorised(req: Request): boolean {
+type AuthResult = "ok" | "wrong-credentials" | "anonymous";
+
+/**
+ * Distinguish "wrong credentials" from "no credentials", deliberately.
+ *
+ * The endpoint used to answer 404 for every failure, so that a stranger who
+ * found the URL could not tell it existed. That is sound against a scanner -
+ * but it also meant a MISCONFIGURED SCHEDULER got the identical 404, which is
+ * indistinguishable from a typo in the path. That cost a real debugging round
+ * trip: the path was correct all along and the header was not.
+ *
+ * So: someone who sends no Authorization header at all still gets 404 and
+ * learns nothing. Someone who sends one that does not match is plainly an
+ * operator wiring up a cron job, and gets a 401 that says so. A scanner does
+ * not send bearer tokens; a broken cron job does.
+ */
+function authorise(req: Request): AuthResult {
   const secret = process.env.CRON_SECRET;
   // Refuse rather than run open: an unauthenticated endpoint that cancels
   // payments is a denial-of-service button for anybody who finds the URL.
-  if (!secret) return false;
+  if (!secret) return "anonymous";
 
   const header = req.headers.get("authorization");
-  return header === `Bearer ${secret}`;
+  if (!header || !header.trim()) return "anonymous";
+  if (header === `Bearer ${secret}`) return "ok";
+  return "wrong-credentials";
 }
 
 async function sweep() {
@@ -60,8 +78,22 @@ async function sweep() {
 }
 
 export async function GET(req: Request) {
-  if (!authorised(req)) {
+  const auth = authorise(req);
+
+  if (auth === "anonymous") {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
+
+  if (auth === "wrong-credentials") {
+    // Never echo the expected value - just confirm the route exists and the
+    // header is the thing that is wrong.
+    return NextResponse.json(
+      {
+        error: "Unauthorized",
+        hint: "This route exists. Send: Authorization: Bearer <CRON_SECRET>, using the CRON_SECRET from this project's environment variables.",
+      },
+      { status: 401 },
+    );
   }
   const result = await sweep();
   console.log("[cron/sweep]", JSON.stringify(result));

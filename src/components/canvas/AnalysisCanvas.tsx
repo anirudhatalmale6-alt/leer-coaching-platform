@@ -500,7 +500,7 @@ export default function AnalysisCanvas({ primary, secondary }: Props) {
             />
             <button
               onClick={commitText}
-              className="rounded-md bg-[var(--accent)] px-3 py-1.5 text-sm font-semibold text-[#06240f]"
+              className="rounded-md bg-[var(--accent)] px-3 py-1.5 text-sm font-semibold text-[var(--on-accent)]"
             >
               Add
             </button>
@@ -577,7 +577,7 @@ function Toolbar(props: {
           onClick={() => props.setTool(t.id)}
           className={`rounded-md px-3 py-1.5 text-sm font-semibold transition ${
             props.tool === t.id
-              ? "bg-[var(--accent)] text-[#06240f]"
+              ? "bg-[var(--accent)] text-[var(--on-accent)]"
               : "bg-[var(--surface-2)] text-[var(--foreground)] hover:bg-[var(--border)]"
           }`}
         >
@@ -606,7 +606,7 @@ function Toolbar(props: {
         disabled={!props.canSplit}
         className={`rounded-md px-3 py-1.5 text-sm font-semibold transition disabled:opacity-40 ${
           props.split
-            ? "bg-[var(--accent)] text-[#06240f]"
+            ? "bg-[var(--accent)] text-[var(--on-accent)]"
             : "bg-[var(--surface-2)] hover:bg-[var(--border)]"
         }`}
       >
@@ -674,7 +674,7 @@ function Transport({
         </button>
         <button
           onClick={stepper.togglePlay}
-          className="rounded-md bg-[var(--accent)] px-5 py-2 text-sm font-semibold text-[#06240f] transition hover:brightness-110"
+          className="rounded-md bg-[var(--accent)] px-5 py-2 text-sm font-semibold text-[var(--on-accent)] transition hover:brightness-110"
           title="Play / pause (Space)"
         >
           {playing ? "Pause" : "Play"}

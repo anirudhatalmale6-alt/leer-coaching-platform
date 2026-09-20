@@ -1,15 +1,45 @@
 @import "tailwindcss";
 
+/**
+ * LEER brand tokens.
+ *
+ * EVERY colour in the app resolves through these variables - there are no
+ * hardcoded hex values in components. That is what makes a brand change a
+ * one-file edit rather than a hunt through forty className strings.
+ *
+ * The one deliberate exception is the annotation pen palette in
+ * lib/canvas/annotations.ts. Those greens and reds are drawn ON TOP OF a
+ * trainee's video, so they are chosen to stay visible against arbitrary
+ * footage, not to match the brand. Re-tinting them to volt lime would make a
+ * coach's marks disappear over a brightly lit gym floor.
+ */
 :root {
-  --background: #0b0f14;
-  --surface: #121821;
-  --surface-2: #182231;
-  --border: #223045;
-  --foreground: #e7edf5;
-  --muted: #8ea0b8;
-  --accent: #4ade80;
-  --accent-dim: #14532d;
+  /* Supplied by the client, 20 Sep. */
+  --background: #0f0f12; /* deep dark charcoal */
+  --surface: #1c1d22; /* cards and containers */
+  --accent: #ccff00; /* volt lime - primary CTA */
+  --foreground: #ffffff;
+  --muted: #a0a0ab;
+
+  /* Derived, to sit consistently between the supplied values. */
+  --surface-2: #26272e; /* inputs and inset panels, one step up from --surface */
+  --border: #3a3c47; /* 1.75:1 against the background - a card edge you can see
+                        without it reading as a drawn box. Measured, not
+                        guessed. Text never uses this colour. */
+
+  /**
+   * Text on the accent.
+   *
+   * Volt lime is a very light colour (relative luminance ~0.85), so white text
+   * on it is unreadable - about 1.2:1. Near-black gives ~16:1. This was nine
+   * separate hardcoded values before the rebrand, which is exactly how a
+   * palette change ends up half-applied.
+   */
+  --on-accent: #0f0f12;
+
+  --accent-dim: #5c7300; /* accent at low light, for subdued accents */
   --warn: #fbbf24;
+  --danger: #f87171;
 }
 
 @theme inline {
@@ -20,12 +50,41 @@
   --color-foreground: var(--foreground);
   --color-muted: var(--muted);
   --color-accent: var(--accent);
+  --color-on-accent: var(--on-accent);
   --color-warn: var(--warn);
+  --color-danger: var(--danger);
+
+  /* Wired up by next/font in layout.tsx - self-hosted at build time, so there
+     is no request to Google on page load and no flash of fallback text. */
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-display: var(--font-jakarta), var(--font-inter), ui-sans-serif,
+    system-ui, sans-serif;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--font-sans);
+  /* The bio-link look depends on this: tight, even letterforms rather than the
+     default loose spacing at large sizes. */
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Display type - the wordmark and page headings. */
+.font-display {
+  font-family: var(--font-display);
+  letter-spacing: -0.02em;
+}
+
+/**
+ * The wordmark, until the real logo file arrives.
+ *
+ * Deliberately a text placeholder the client can see is a placeholder, rather
+ * than something that looks finished and quietly ships as the brand.
+ */
+.wordmark {
+  font-family: var(--font-display);
+  font-weight: 800;
+  letter-spacing: 0.18em;
 }

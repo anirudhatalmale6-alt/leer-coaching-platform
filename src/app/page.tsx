@@ -25,8 +25,8 @@ export default async function Home() {
   return (
     <main className="flex-1">
       <div className="mx-auto max-w-5xl px-6 py-20">
-        <p className="text-xs font-semibold tracking-[0.3em] text-[var(--muted)]">
-          LEER
+        <p className="wordmark text-xs text-[var(--muted)]">
+          LEER SPORTS
         </p>
         <h1 className="mt-4 text-5xl font-semibold leading-tight tracking-tight">
           1:1 video coaching,
@@ -43,14 +43,14 @@ export default async function Home() {
           {session?.user ? (
             <Link
               href="/dashboard"
-              className="rounded-lg bg-[var(--accent)] px-6 py-3 font-semibold text-[#06240f] transition hover:brightness-110"
+              className="rounded-lg bg-[var(--accent)] px-6 py-3 font-semibold text-[var(--on-accent)] transition hover:brightness-110"
             >
               Go to dashboard
             </Link>
           ) : (
             <Link
               href="/signin"
-              className="rounded-lg bg-[var(--accent)] px-6 py-3 font-semibold text-[#06240f] transition hover:brightness-110"
+              className="rounded-lg bg-[var(--accent)] px-6 py-3 font-semibold text-[var(--on-accent)] transition hover:brightness-110"
             >
               Get started
             </Link>

@@ -429,6 +429,52 @@ red - it did not.
    bookings with nothing to explain why. The test now sweeps every price in the
    allowed range instead of spot-checking a value that happened to pass.
 
+### The brand system
+
+Client-supplied, 20 Sep, and it all lives in `src/app/globals.css`:
+
+| token | value | |
+| --- | --- | --- |
+| `--background` | `#0F0F12` | deep dark charcoal |
+| `--surface` | `#1C1D22` | cards and containers |
+| `--accent` | `#CCFF00` | volt lime, primary CTA |
+| `--foreground` | `#FFFFFF` | main text |
+| `--muted` | `#A0A0AB` | secondary text |
+| `--on-accent` | `#0F0F12` | text ON the accent |
+
+`--surface-2`, `--border`, `--accent-dim` and `--danger` are derived to sit
+consistently between them.
+
+`--on-accent` exists because volt lime is a very light colour: white text on it
+is about 1.2:1, near-black is 16.3:1. Before the rebrand that value was
+hardcoded nine separate times across seven files, which is precisely how a
+palette change ends up half-applied. There are now **no hex values in any
+component**.
+
+The one deliberate exception is the annotation pen palette in
+`lib/canvas/annotations.ts`. Those colours are drawn on top of a trainee's
+video and are chosen to stay visible against arbitrary footage; re-tinting them
+to brand colours would make a coach's marks vanish over a bright gym floor.
+
+Type is Inter for reading and Plus Jakarta Sans for the wordmark and headings,
+loaded through `next/font` so they are downloaded at build time and served from
+our own origin - no request to Google on page load, no flash of fallback text.
+Latin subset, only the weights used.
+
+#### Verified by measurement, then by looking
+
+A script walks every text node on all seven pages, resolves the real background
+through the ancestor chain, and computes the contrast ratio: **0 below WCAG AA**.
+The checker was itself verified by setting `--muted` to near-black, which made
+it report 82 failures - a checker that only ever says "fine" is worth nothing.
+
+It still missed one thing, and a screenshot caught it. The booking CTA in its
+disabled state was `opacity-40` over volt lime, which composites to a muddy
+olive with dark text - it read as broken rather than as disabled. The script
+reads computed `color` and does not compose ancestor opacity, so it saw the
+enabled colours. Accent buttons now switch to a neutral surface when disabled
+instead of fading.
+
 ### Sign-in now returns you to where you were going
 
 `/signin` ignored any return URL and always went to `/dashboard`, so a visitor

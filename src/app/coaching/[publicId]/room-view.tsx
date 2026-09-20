@@ -183,7 +183,7 @@ export default function RoomView(props: Props) {
             <button
               onClick={() => act("deliver")}
               disabled={busy}
-              className="rounded-lg bg-[var(--accent)] px-5 py-2.5 font-semibold text-[#06240f] transition hover:brightness-110 disabled:opacity-50"
+              className="rounded-lg bg-[var(--accent)] px-5 py-2.5 font-semibold text-[var(--on-accent)] transition hover:brightness-110 disabled:bg-[var(--surface-2)] disabled:text-[var(--muted)]"
             >
               {busy ? "Submitting..." : "Submit feedback"}
             </button>
@@ -193,7 +193,7 @@ export default function RoomView(props: Props) {
             <button
               onClick={() => act("approve")}
               disabled={busy}
-              className="rounded-lg bg-[var(--accent)] px-5 py-2.5 font-semibold text-[#06240f] transition hover:brightness-110 disabled:opacity-50"
+              className="rounded-lg bg-[var(--accent)] px-5 py-2.5 font-semibold text-[var(--on-accent)] transition hover:brightness-110 disabled:bg-[var(--surface-2)] disabled:text-[var(--muted)]"
             >
               {busy ? "Releasing..." : "Approve and pay the coach"}
             </button>
@@ -205,7 +205,7 @@ export default function RoomView(props: Props) {
             </p>
           )}
 
-          {error && <p className="text-sm text-red-400">{error}</p>}
+          {error && <p className="text-sm text-[var(--danger)]">{error}</p>}
         </div>
       </div>
     </main>

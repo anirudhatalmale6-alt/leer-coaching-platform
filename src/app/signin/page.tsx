@@ -27,8 +27,8 @@ export default async function SignIn({
   return (
     <main className="flex flex-1 items-center justify-center px-6 py-20">
       <div className="w-full max-w-sm rounded-xl border border-[var(--border)] bg-[var(--surface)] p-8">
-        <p className="text-xs font-semibold tracking-[0.3em] text-[var(--muted)]">
-          LEER
+        <p className="wordmark text-xs text-[var(--muted)]">
+          LEER SPORTS
         </p>
         <h1 className="mt-3 text-2xl font-semibold">Sign in</h1>
         <p className="mt-2 text-sm text-[var(--muted)]">

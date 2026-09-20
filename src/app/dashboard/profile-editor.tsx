@@ -221,7 +221,7 @@ export default function ProfileEditor({ appHost, initial, payoutsActive }: Props
             </button>
             <p className="mt-2 text-xs text-[var(--muted)]">JPEG, PNG or WebP. Up to 5MB.</p>
             {errors.avatarKey && (
-              <p className="mt-2 text-xs text-red-400">{errors.avatarKey}</p>
+              <p className="mt-2 text-xs text-[var(--danger)]">{errors.avatarKey}</p>
             )}
           </div>
         </div>
@@ -377,7 +377,7 @@ export default function ProfileEditor({ appHost, initial, payoutsActive }: Props
         )}
       </section>
 
-      {errors.form && <p className="mt-4 text-sm text-red-400">{errors.form}</p>}
+      {errors.form && <p className="mt-4 text-sm text-[var(--danger)]">{errors.form}</p>}
 
       {/* Sticky save bar, per the spec. Only rendered once something changed,
           so it never sits over the page demanding attention for nothing. */}
@@ -388,7 +388,7 @@ export default function ProfileEditor({ appHost, initial, payoutsActive }: Props
             <button
               onClick={save}
               disabled={saving}
-              className="rounded-lg bg-[var(--accent)] px-5 py-2.5 font-semibold text-[#06240f] transition hover:brightness-110 disabled:opacity-50"
+              className="rounded-lg bg-[var(--accent)] px-5 py-2.5 font-semibold text-[var(--on-accent)] transition hover:brightness-110 disabled:bg-[var(--surface-2)] disabled:text-[var(--muted)]"
             >
               {saving ? "Saving..." : "Save profile changes"}
             </button>
@@ -420,7 +420,7 @@ function Field({
         {label}
       </label>
       <div className="mt-2">{children}</div>
-      {error && <p className="mt-1.5 text-xs text-red-400">{error}</p>}
+      {error && <p className="mt-1.5 text-xs text-[var(--danger)]">{error}</p>}
     </div>
   );
 }

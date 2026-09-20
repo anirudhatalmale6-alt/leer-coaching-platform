@@ -52,7 +52,7 @@ export default function OnboardButton() {
         <button
           onClick={start}
           disabled={busy}
-          className="rounded-lg bg-[var(--accent)] px-5 py-2.5 font-semibold text-[#06240f] transition hover:brightness-110 disabled:opacity-50"
+          className="rounded-lg bg-[var(--accent)] px-5 py-2.5 font-semibold text-[var(--on-accent)] transition hover:brightness-110 disabled:bg-[var(--surface-2)] disabled:text-[var(--muted)]"
         >
           {busy ? "Opening Stripe..." : "Connect Stripe and become a Trainer"}
         </button>
@@ -61,7 +61,7 @@ export default function OnboardButton() {
         Stripe fixes this when the account is created and it cannot easily be
         changed later, so pick the country your payouts should land in.
       </p>
-      {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
+      {error && <p className="mt-3 text-sm text-[var(--danger)]">{error}</p>}
     </div>
   );
 }

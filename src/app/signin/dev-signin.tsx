@@ -52,7 +52,7 @@ export default function DevSignIn({ next }: { next: string }) {
       >
         {busy ? "Signing in..." : "Dev sign in"}
       </button>
-      {error && <p className="mt-2 text-xs text-red-400">{error}</p>}
+      {error && <p className="mt-2 text-xs text-[var(--danger)]">{error}</p>}
     </div>
   );
 }

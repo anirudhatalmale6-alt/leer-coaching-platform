@@ -82,12 +82,13 @@ export default async function TrainerPage({ params }: Props) {
     <main className="flex-1">
       <header className="border-b border-[var(--border)]">
         <div className="mx-auto flex max-w-3xl items-center justify-between px-5 py-4">
-          <Link href="/" className="text-sm font-semibold tracking-[0.25em]">
-            LEER
+          {/* Text wordmark standing in until the logo file arrives. */}
+          <Link href="/" className="wordmark text-sm">
+            LEER SPORTS
           </Link>
           <Link
             href="/signin"
-            className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm text-[var(--muted)] transition hover:text-[var(--foreground)]"
+            className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-sm text-[var(--muted)] transition hover:border-[var(--muted)] hover:text-[var(--foreground)]"
           >
             Sign in
           </Link>
@@ -123,7 +124,7 @@ export default async function TrainerPage({ params }: Props) {
               <Initial name={trainer.name} />
             )}
 
-            <h1 className="mt-5 text-2xl font-semibold">{displayName}</h1>
+            <h1 className="font-display mt-5 text-2xl font-bold">{displayName}</h1>
             {trainer.category && (
               <span className="mt-2 rounded-full bg-[var(--surface-2)] px-3 py-1 text-xs font-semibold tracking-wide text-[var(--muted)]">
                 {trainer.category.toUpperCase()}
@@ -167,7 +168,7 @@ export default async function TrainerPage({ params }: Props) {
             </p>
 
             <div className="mt-3 flex items-baseline gap-2">
-              <span className="text-3xl font-semibold">
+              <span className="font-display text-3xl font-bold">
                 {formatPrice(trainer.coachingPriceCents)}
               </span>
               <span className="text-sm text-[var(--muted)]">per clip</span>
@@ -182,7 +183,7 @@ export default async function TrainerPage({ params }: Props) {
             {bookable ? (
               <Link
                 href={`/book/${trainer.username}`}
-                className="mt-6 block rounded-xl bg-[var(--accent)] px-5 py-3.5 text-center font-semibold text-[#06240f] transition hover:brightness-110"
+                className="mt-6 block rounded-xl bg-[var(--accent)] px-5 py-3.5 text-center font-semibold text-[var(--on-accent)] transition hover:brightness-110"
               >
                 Book video coaching ({formatPrice(trainer.coachingPriceCents)})
               </Link>

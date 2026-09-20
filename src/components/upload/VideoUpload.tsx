@@ -204,7 +204,7 @@ export default function VideoUpload({
         )}
         {stage === "error" && (
           <>
-            <p className="font-semibold text-red-400">{error}</p>
+            <p className="font-semibold text-[var(--danger)]">{error}</p>
             <p className="mt-1 text-sm text-[var(--muted)]">Click to choose another file.</p>
           </>
         )}

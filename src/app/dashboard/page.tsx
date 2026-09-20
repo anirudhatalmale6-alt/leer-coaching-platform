@@ -51,8 +51,8 @@ export default async function Dashboard({
       <div className="mx-auto max-w-3xl px-6 py-14">
         <div className="flex items-start justify-between gap-6">
           <div>
-            <p className="text-xs font-semibold tracking-[0.3em] text-[var(--muted)]">
-              LEER
+            <p className="wordmark text-xs text-[var(--muted)]">
+              LEER SPORTS
             </p>
             <h1 className="mt-2 text-3xl font-semibold">
               {user.name ?? user.email}

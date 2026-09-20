@@ -92,12 +92,12 @@ export default function BookingFlow({
       <button
         onClick={proceed}
         disabled={!videoKey || busy}
-        className="mt-6 w-full rounded-xl bg-[var(--accent)] px-5 py-3.5 font-semibold text-[#06240f] transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
+        className="mt-6 w-full rounded-xl bg-[var(--accent)] px-5 py-3.5 font-semibold text-[var(--on-accent)] transition hover:brightness-110 disabled:cursor-not-allowed disabled:bg-[var(--surface-2)] disabled:text-[var(--muted)]"
       >
         {busy ? "Opening secure payment..." : `Proceed to payment (${priceLabel})`}
       </button>
 
-      {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
+      {error && <p className="mt-3 text-sm text-[var(--danger)]">{error}</p>}
 
       <p className="mt-4 text-center text-xs text-[var(--muted)]">
         Your card is authorised now and only charged when your coach delivers.

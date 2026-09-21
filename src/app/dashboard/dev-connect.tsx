@@ -34,6 +34,16 @@ export default function DevConnect() {
       body: { transfersStatus: "active", payoutsStatus: "restricted" },
     },
     {
+      // The client's real account state, which used to render as "Not yet".
+      label: "Active, with eventually-due items",
+      body: {
+        transfersStatus: "active",
+        payoutsStatus: "active",
+        requirementsOutstanding: true,
+        requirements: "eventually",
+      },
+    },
+    {
       label: "Form done, still verifying",
       body: { transfersStatus: "restricted", requirementsOutstanding: true },
     },
@@ -41,7 +51,7 @@ export default function DevConnect() {
   ];
 
   return (
-    <div className="mt-6 rounded-lg border border-dashed border-[var(--border)] p-4">
+    <div data-dev-panel className="mt-6 rounded-lg border border-dashed border-[var(--border)] p-4">
       <p className="text-xs font-semibold tracking-widest text-[var(--muted)]">
         DEV MODE - SIMULATED STRIPE STATES
       </p>

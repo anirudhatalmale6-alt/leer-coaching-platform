@@ -570,3 +570,51 @@ assumed, because the local reference only documents v1:
    is still being verified is genuinely earning, and collapsing the two would
    make a working account look broken. `qualifiesAsTrainer` still depends on
    transfers alone.
+
+### The onboarding "extra verification step" - what it actually was
+
+The client reported being sent back through a Stripe review screen after
+completing onboarding, and asked for it to be removed. Investigating turned up
+three separate things, only one of which was Stripe's.
+
+**Stripe already collects the minimum.** A v2 account link defaults to
+`collection_options: { fields: "currently_due", future_requirements: "omit" }` -
+confirmed by reading the created link back, and meaningful because the API
+rejects unknown parameters (a deliberately nonsense field is refused). There is
+no shorter version of that form to ask for. The date of birth and SSN last 4
+are Stripe's KYC floor for a US individual.
+
+**The account was never actually unfinished.** Reading his live account:
+`stripe_transfers: active`, `payouts: active`, and four outstanding
+requirements - all with `deadline.status: "eventually_due"`. Nothing was
+blocking. He was fully operational the whole time.
+
+**LEER told him otherwise.** The dashboard showed "Stripe has everything it
+needs: **Not yet**", with a note claiming outstanding requirements block the
+transfers capability. That note was simply wrong for `eventually_due` items,
+and a trainer reading it has every reason to go round the loop again.
+
+What changed:
+
+- `summariseRequirements` splits requirements into **blocking** and
+  **upcoming**, collapses Stripe's dotted field paths into plain questions
+  (three `date_of_birth.*` entries become "Your date of birth"), and drops
+  anything Stripe is doing at its own end. An unknown deadline is treated as
+  blocking - failing safe.
+- The payout banner reports status from whether anything genuinely blocks.
+  Upcoming items appear as a quiet footnote, never as a warning.
+- The dashboard **re-reads the account from Stripe** when the mirror could be
+  behind - returning from onboarding, or anything still unsettled - so a
+  trainer never lands on a page describing the state they had *before* filling
+  the form in. Skipped for settled accounts, so it is not a round trip on every
+  page load.
+- Someone who has started Stripe but is not yet elevated sees "Stripe is
+  checking your details", not the same cold "Connect a Stripe account" call to
+  action they just completed. Resuming does not ask for their country again -
+  Stripe fixed it at account creation and it cannot be changed.
+- The raw capability rows are now dev-only (`data-dev-panel`), where "Not yet"
+  is an accurate label for a debugging view.
+
+Falsified, not assumed: reverting `summariseRequirements` to treat every
+requirement as blocking makes his exact account state render "ACTION NEEDED"
+instead of "You are fully set up" - which is what he saw.

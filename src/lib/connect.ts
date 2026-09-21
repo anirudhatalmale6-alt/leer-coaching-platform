@@ -2,6 +2,12 @@ import type Stripe from "stripe";
 import { prisma } from "./prisma";
 import { getStripe } from "./stripe";
 import { appUrl } from "./env";
+import {
+  serialiseRequirements,
+  summariseRequirements,
+  type RawRequirement,
+  type Requirements,
+} from "./connect-requirements";
 
 /**
  * Stripe Connect onboarding and the Trainee -> Trainer role elevation.
@@ -110,6 +116,15 @@ export type ConnectStatus = {
   payoutsStatus: string | null;
   /** Whether Stripe is still asking the trainer for information. */
   requirementsOutstanding: boolean;
+  /**
+   * What it is asking for, split into blocking and merely upcoming.
+   *
+   * The split is the whole point - see connect-requirements.ts. A trainer whose
+   * only outstanding items are `eventually_due` is fully operational, and
+   * telling them otherwise is what sends them back through onboarding for
+   * nothing.
+   */
+  requirements: Requirements;
 };
 
 type V2Account = {
@@ -124,17 +139,20 @@ type V2Account = {
       };
     };
   };
-  requirements?: { summary?: unknown; entries?: unknown[] };
+  requirements?: { summary?: unknown; entries?: RawRequirement[] };
   metadata?: Record<string, string> | null;
 };
 
 export function readStatus(account: V2Account): ConnectStatus {
   const balance = account.configuration?.recipient?.capabilities?.stripe_balance;
-  const entries = account.requirements?.entries;
+  const entries = Array.isArray(account.requirements?.entries)
+    ? account.requirements.entries
+    : [];
   return {
     transfersStatus: balance?.stripe_transfers?.status ?? null,
     payoutsStatus: balance?.payouts?.status ?? null,
-    requirementsOutstanding: Array.isArray(entries) ? entries.length > 0 : false,
+    requirementsOutstanding: entries.length > 0,
+    requirements: summariseRequirements(entries),
   };
 }
 
@@ -309,6 +327,11 @@ export async function syncConnectStatus(userId: string) {
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user?.stripeAccountId) return null;
 
+  // Placeholder ids from the dev simulation do not exist at Stripe. Asking
+  // about them throws on every dashboard render and would also overwrite the
+  // simulated state the panel exists to produce.
+  if (user.stripeAccountId.startsWith("acct_dev_")) return null;
+
   const stripe = getStripe();
   if (!stripe) return null;
 
@@ -338,6 +361,7 @@ export async function applyConnectStatus(userId: string, status: ConnectStatus) 
       stripeTransfersStatus: status.transfersStatus,
       stripePayoutsStatus: status.payoutsStatus,
       stripeRequirementsOutstanding: status.requirementsOutstanding,
+      stripeRequirements: serialiseRequirements(status.requirements),
       stripeSyncedAt: new Date(),
       isTrainer: nowTrainer,
       // Record the first elevation only, so a later Stripe hiccup that briefly

@@ -3,7 +3,14 @@
 import { useState } from "react";
 import { SUPPORTED_COUNTRIES } from "@/lib/connect";
 
-export default function OnboardButton() {
+/**
+ * `resume` is for a trainer who already has a Stripe account and is coming
+ * back to finish. They must not be asked for their country again - Stripe
+ * fixed it at account creation and it cannot be changed, so the picker would
+ * be a pointless extra field at exactly the moment we are trying to remove
+ * friction. The server uses the stored country for an existing account.
+ */
+export default function OnboardButton({ resume = false }: { resume?: boolean }) {
   const [country, setCountry] = useState("US");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -28,6 +35,21 @@ export default function OnboardButton() {
       setError("Network error. Please try again.");
     }
     setBusy(false);
+  }
+
+  if (resume) {
+    return (
+      <div className="mt-5">
+        <button
+          onClick={start}
+          disabled={busy}
+          className="rounded-lg bg-[var(--accent)] px-5 py-2.5 font-semibold text-[var(--on-accent)] transition hover:brightness-110 disabled:bg-[var(--surface-2)] disabled:text-[var(--muted)]"
+        >
+          {busy ? "Opening Stripe..." : "Continue with Stripe"}
+        </button>
+        {error && <p className="mt-3 text-sm text-[var(--danger)]">{error}</p>}
+      </div>
+    );
   }
 
   return (

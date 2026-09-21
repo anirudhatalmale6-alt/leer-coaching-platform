@@ -29,6 +29,7 @@ export async function POST(req: Request) {
   const body = (await req.json().catch(() => ({}))) as {
     transfersStatus?: string;
     payoutsStatus?: string;
+    requirements?: "eventually" | "blocking";
     requirementsOutstanding?: boolean;
   };
 
@@ -48,6 +49,14 @@ export async function POST(req: Request) {
     // finished verifying where to pay out to.
     payoutsStatus: body.payoutsStatus ?? body.transfersStatus ?? "active",
     requirementsOutstanding: body.requirementsOutstanding ?? false,
+    // "eventually" reproduces the client's real live account: fully active,
+    // with date-of-birth and SSN outstanding but blocking nothing.
+    requirements:
+      body.requirements === "eventually"
+        ? { blocking: [], upcoming: ["Your date of birth", "The last 4 digits of your SSN"] }
+        : body.requirementsOutstanding
+          ? { blocking: ["Your home address"], upcoming: [] }
+          : { blocking: [], upcoming: [] },
   });
 
   return NextResponse.json({

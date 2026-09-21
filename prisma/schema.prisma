@@ -53,6 +53,10 @@ model User {
   /// booking - see ConnectStatus in lib/connect.ts.
   stripePayoutsStatus           String?
   stripeRequirementsOutstanding Boolean   @default(false)
+  /// JSON from lib/connect-requirements.ts: what Stripe still wants, split
+  /// into what BLOCKS the account and what it will merely want later. The two
+  /// must not be conflated - see that file.
+  stripeRequirements            String?
   stripeSyncedAt                DateTime?
 
   // --- Public profile (Phase 2 M1) ---

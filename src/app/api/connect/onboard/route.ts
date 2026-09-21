@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
+import { prisma } from "@/lib/prisma";
 import { isSupportedCountry, startOnboarding } from "@/lib/connect";
 import { stripeConfigured } from "@/lib/env";
 
@@ -23,7 +24,27 @@ export async function POST(req: Request) {
   }
 
   const body = (await req.json().catch(() => ({}))) as { country?: string };
-  const country = (body.country ?? "").toUpperCase();
+
+  /**
+   * A trainer resuming onboarding does not pick a country again.
+   *
+   * Stripe fixes the country at account creation and it cannot comfortably be
+   * changed, so for an existing account the stored value is the only correct
+   * one. Asking again would be a pointless extra step - and worse, a trainer
+   * who picked differently the second time would get a confusing rejection
+   * rather than the finish-your-details form they were expecting.
+   */
+  const existing = await prisma.user.findUnique({
+    where: { id: session.user.id },
+    select: { stripeAccountId: true, stripeCountry: true },
+  });
+
+  const country = (
+    existing?.stripeAccountId && existing.stripeCountry
+      ? existing.stripeCountry
+      : (body.country ?? "")
+  ).toUpperCase();
+
   if (!isSupportedCountry(country)) {
     return NextResponse.json(
       { error: "Choose the country your bank account is in." },

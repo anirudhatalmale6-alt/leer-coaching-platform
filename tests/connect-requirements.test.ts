@@ -9,38 +9,43 @@ import {
 } from "../src/lib/connect-requirements";
 
 /**
- * The fixture is the real thing: these four entries are exactly what the live
- * Stripe test API returned for the client's own connected account, including
- * the `eventually_due` deadline that made a fully working account look broken.
+ * THE FIXTURE IS COPIED FROM A LIVE RESPONSE, NOT INVENTED.
+ *
+ * This matters more than it sounds. The first version of this file used a
+ * made-up shape with a top-level `deadline` field. No such field exists - an
+ * entry carries `minimum_deadline` - so the code read undefined for every
+ * requirement and classified them all as blocking, which is precisely the bug
+ * this module was written to fix. The tests passed the whole time, because
+ * they were testing my guess against itself.
+ *
+ * Below is the real entry returned by the client's own connected account,
+ * verbatim apart from formatting.
  */
+const LIVE_ENTRY: RawRequirement = {
+  awaiting_action_from: "user",
+  description: "identity.individual.date_of_birth.day",
+  impact: {
+    restricts_capabilities: [
+      {
+        capability: "stripe_balance.payouts",
+        deadline: { status: "eventually_due" },
+      },
+    ],
+  },
+  minimum_deadline: { status: "eventually_due" },
+};
+
 const LIVE_ENTRIES: RawRequirement[] = [
-  {
-    description: "identity.individual.date_of_birth.day",
-    awaiting_action_from: "user",
-    deadline: { status: "eventually_due" },
-  },
-  {
-    description: "identity.individual.date_of_birth.month",
-    awaiting_action_from: "user",
-    deadline: { status: "eventually_due" },
-  },
-  {
-    description: "identity.individual.date_of_birth.year",
-    awaiting_action_from: "user",
-    deadline: { status: "eventually_due" },
-  },
-  {
-    description: "identity.individual.id_numbers.us_ssn_last_4",
-    awaiting_action_from: "user",
-    deadline: { status: "eventually_due" },
-  },
+  LIVE_ENTRY,
+  { ...LIVE_ENTRY, description: "identity.individual.date_of_birth.month" },
+  { ...LIVE_ENTRY, description: "identity.individual.date_of_birth.year" },
+  { ...LIVE_ENTRY, description: "identity.individual.id_numbers.us_ssn_last_4" },
 ];
 
-describe("summariseRequirements - the live account's real entries", () => {
+describe("the live account's real entries", () => {
   test("NOTHING is blocking: these are eventually_due", () => {
-    // This is the whole point. The account's transfers and payouts were both
-    // active; treating these as blocking is what told a working trainer that
-    // Stripe still needed something from them.
+    // The account's transfers and payouts were both active. Treating these as
+    // blocking is what told a working trainer he still had to verify.
     const r = summariseRequirements(LIVE_ENTRIES);
     assert.deepEqual(r.blocking, []);
     assert.equal(isBlocked(r), false);
@@ -53,12 +58,48 @@ describe("summariseRequirements - the live account's real entries", () => {
       "The last 4 digits of your SSN",
     ]);
   });
+
+  test("the deadline is read from minimum_deadline, the field that exists", () => {
+    // Guards the exact regression: reading a non-existent field makes
+    // everything look blocking.
+    const r = summariseRequirements([
+      { description: "identity.individual.name", awaiting_action_from: "user", minimum_deadline: { status: "eventually_due" } },
+    ]);
+    assert.deepEqual(r, { blocking: [], upcoming: ["Your legal name"] });
+  });
+
+  test("falls back to impact deadlines when minimum_deadline is absent", () => {
+    const r = summariseRequirements([
+      {
+        description: "identity.individual.name",
+        awaiting_action_from: "user",
+        impact: { restricts_capabilities: [{ deadline: { status: "eventually_due" } }] },
+      },
+    ]);
+    assert.deepEqual(r.upcoming, ["Your legal name"]);
+  });
+
+  test("soonest impact wins - blocking one capability now beats later", () => {
+    const r = summariseRequirements([
+      {
+        description: "identity.individual.name",
+        awaiting_action_from: "user",
+        impact: {
+          restricts_capabilities: [
+            { deadline: { status: "eventually_due" } },
+            { deadline: { status: "currently_due" } },
+          ],
+        },
+      },
+    ]);
+    assert.deepEqual(r.blocking, ["Your legal name"]);
+  });
 });
 
 describe("summariseRequirements", () => {
   test("currently_due DOES block", () => {
     const r = summariseRequirements([
-      { description: "identity.individual.address.line1", awaiting_action_from: "user", deadline: { status: "currently_due" } },
+      { description: "identity.individual.address.line1", awaiting_action_from: "user", minimum_deadline: { status: "currently_due" } },
     ]);
     assert.deepEqual(r.blocking, ["Your home address"]);
     assert.equal(isBlocked(r), true);
@@ -66,14 +107,15 @@ describe("summariseRequirements", () => {
 
   test("past_due blocks too - anything that is not eventually_due does", () => {
     const r = summariseRequirements([
-      { description: "identity.individual.verification.document", awaiting_action_from: "user", deadline: { status: "past_due" } },
+      { description: "identity.individual.verification.document", awaiting_action_from: "user", minimum_deadline: { status: "past_due" } },
     ]);
     assert.deepEqual(r.blocking, ["A photo of your ID"]);
   });
 
-  test("a missing deadline is treated as blocking, not ignored", () => {
-    // Failing safe: an unknown shape must not quietly downgrade a real block
-    // into a footnote.
+  test("NO deadline at all is treated as blocking, not ignored", () => {
+    // Failing safe. An unknown shape must not quietly downgrade a real block
+    // into a footnote - but note this is also what bit us when the field name
+    // was wrong, so the fail-safe is not a substitute for reading real data.
     const r = summariseRequirements([
       { description: "identity.individual.name", awaiting_action_from: "user" },
     ]);
@@ -82,15 +124,15 @@ describe("summariseRequirements", () => {
 
   test("work Stripe is doing itself is not shown to the trainer", () => {
     const r = summariseRequirements([
-      { description: "identity.individual.verification.document", awaiting_action_from: "stripe", deadline: { status: "currently_due" } },
+      { description: "identity.individual.verification.document", awaiting_action_from: "stripe", minimum_deadline: { status: "currently_due" } },
     ]);
     assert.deepEqual(r, { blocking: [], upcoming: [] });
   });
 
   test("the same item never appears in both lists", () => {
     const r = summariseRequirements([
-      { description: "identity.individual.address.line1", awaiting_action_from: "user", deadline: { status: "currently_due" } },
-      { description: "identity.individual.address.city", awaiting_action_from: "user", deadline: { status: "eventually_due" } },
+      { description: "identity.individual.address.line1", awaiting_action_from: "user", minimum_deadline: { status: "currently_due" } },
+      { description: "identity.individual.address.city", awaiting_action_from: "user", minimum_deadline: { status: "eventually_due" } },
     ]);
     assert.deepEqual(r.blocking, ["Your home address"]);
     assert.deepEqual(r.upcoming, []);
@@ -98,14 +140,14 @@ describe("summariseRequirements", () => {
 
   test("longest matching prefix wins, so SSN is not just 'tax or ID number'", () => {
     const r = summariseRequirements([
-      { description: "identity.individual.id_numbers.us_ssn_last_4", awaiting_action_from: "user", deadline: { status: "currently_due" } },
+      { description: "identity.individual.id_numbers.us_ssn_last_4", awaiting_action_from: "user", minimum_deadline: { status: "currently_due" } },
     ]);
     assert.deepEqual(r.blocking, ["The last 4 digits of your SSN"]);
   });
 
   test("an unmapped field still says something human, never nothing", () => {
     const r = summariseRequirements([
-      { description: "identity.some_future_field.sub_part", awaiting_action_from: "user", deadline: { status: "currently_due" } },
+      { description: "identity.some_future_field.sub_part", awaiting_action_from: "user", minimum_deadline: { status: "currently_due" } },
     ]);
     assert.deepEqual(r.blocking, ["Sub part"]);
   });

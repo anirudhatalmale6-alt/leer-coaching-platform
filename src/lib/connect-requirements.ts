@@ -27,8 +27,40 @@ export type RequirementDeadline = "currently_due" | "eventually_due" | "past_due
 export type RawRequirement = {
   description?: string;
   awaiting_action_from?: string;
-  deadline?: { status?: RequirementDeadline };
+  /**
+   * THE deadline field. Confirmed against a live account dump - an entry has
+   * `minimum_deadline`, and there is NO top-level `deadline`.
+   *
+   * This was originally written as `deadline`, a field that does not exist, so
+   * every requirement read as undefined and fell through to "blocking" - which
+   * reproduced the exact bug this module was written to fix. The unit tests
+   * passed because the fixture had been invented rather than copied from a
+   * real response.
+   */
+  minimum_deadline?: { status?: RequirementDeadline };
+  /** Per-capability detail. `minimum_deadline` is the aggregate of these. */
+  impact?: {
+    restricts_capabilities?: {
+      capability?: string;
+      deadline?: { status?: RequirementDeadline };
+    }[];
+  };
 };
+
+/** The soonest deadline Stripe attaches to this requirement, if any. */
+function deadlineOf(entry: RawRequirement): RequirementDeadline | undefined {
+  if (entry.minimum_deadline?.status) return entry.minimum_deadline.status;
+
+  // Fall back to the per-capability impacts. "Soonest wins" - if a requirement
+  // blocks one capability now and another later, it blocks now.
+  const statuses = (entry.impact?.restricts_capabilities ?? [])
+    .map((r) => r.deadline?.status)
+    .filter((s): s is RequirementDeadline => Boolean(s));
+  if (statuses.length === 0) return undefined;
+  if (statuses.includes("past_due")) return "past_due";
+  if (statuses.includes("currently_due")) return "currently_due";
+  return statuses[0];
+}
 
 export type Requirements = {
   /** Stripe wants these now; the account is limited until they arrive. */
@@ -92,7 +124,7 @@ export function summariseRequirements(entries: RawRequirement[]): Requirements {
     if (entry.awaiting_action_from && entry.awaiting_action_from !== "user") continue;
 
     const text = label(entry.description);
-    const status = entry.deadline?.status;
+    const status = deadlineOf(entry);
     const target = status === "eventually_due" ? upcoming : blocking;
     if (!target.includes(text)) target.push(text);
   }

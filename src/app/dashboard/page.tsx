@@ -10,6 +10,7 @@ import ActiveRequests from "./active-requests";
 import { getPayoutDestination, syncConnectStatus } from "@/lib/connect";
 import { parseRequirements } from "@/lib/connect-requirements";
 import { settleIfExpired } from "@/lib/rooms";
+import Wordmark from "@/components/Wordmark";
 
 function Row({ label, ok, note }: { label: string; ok: boolean; note?: string }) {
   return (
@@ -141,9 +142,7 @@ export default async function Dashboard({
       <div className="mx-auto max-w-3xl px-6 py-14">
         <div className="flex items-start justify-between gap-6">
           <div>
-            <p className="wordmark text-xs text-[var(--muted)]">
-              LEER SPORTS
-            </p>
+            <Wordmark className="text-[var(--muted)]" />
             <h1 className="mt-2 text-3xl font-semibold">
               {user.name ?? user.email}
             </h1>

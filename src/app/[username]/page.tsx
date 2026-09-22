@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { getPublicProfile } from "@/lib/profile-store";
 import { formatPrice, isSellable } from "@/lib/profile";
 import { appUrl } from "@/lib/env";
+import Wordmark from "@/components/Wordmark";
 
 /**
  * The trainer's public sales page: leersports.com/<username>.
@@ -82,9 +83,8 @@ export default async function TrainerPage({ params }: Props) {
     <main className="flex-1">
       <header className="border-b border-[var(--border)]">
         <div className="mx-auto flex max-w-3xl items-center justify-between px-5 py-4">
-          {/* Text wordmark standing in until the logo file arrives. */}
-          <Link href="/" className="wordmark text-sm">
-            LEER SPORTS
+          <Link href="/">
+            <Wordmark size="lg" />
           </Link>
           <Link
             href="/signin"

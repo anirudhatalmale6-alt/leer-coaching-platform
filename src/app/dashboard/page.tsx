@@ -7,8 +7,10 @@ import DevConnect from "./dev-connect";
 import ProfileEditor from "./profile-editor";
 import PayoutBanner from "./payout-banner";
 import ActiveRequests from "./active-requests";
+import SessionList, { type SessionRow } from "./session-list";
 import { getPayoutDestination, syncConnectStatus } from "@/lib/connect";
 import { parseRequirements } from "@/lib/connect-requirements";
+import { describeStatus, trainerShareCents, type RoomStatus } from "@/lib/escrow";
 import { settleIfExpired } from "@/lib/rooms";
 import Wordmark from "@/components/Wordmark";
 
@@ -133,6 +135,40 @@ export default async function Dashboard({
     }
   }
 
+  /**
+   * Every room this person is part of, in EITHER role.
+   *
+   * Queried for trainees too - that is the whole point. The coach's queue
+   * above is filtered to trainerId, so without this a trainee who booked a
+   * pass had no way back to it from anywhere in the app.
+   */
+  const mine = await prisma.coachingRoom.findMany({
+    where: { OR: [{ traineeId: user.id }, { trainerId: user.id }] },
+    orderBy: { createdAt: "desc" },
+    take: 25,
+    include: {
+      trainee: { select: { name: true, email: true } },
+      trainer: { select: { name: true, username: true } },
+    },
+  });
+
+  const sessions: SessionRow[] = mine.map((room) => {
+    const iAmTrainee = room.traineeId === user!.id;
+    return {
+      publicId: room.publicId,
+      role: iAmTrainee ? "trainee" : "trainer",
+      counterparty: iAmTrainee
+        ? (room.trainer.name ?? room.trainer.username ?? "your coach")
+        : (room.trainee.name ?? room.trainee.email?.split("@")[0] ?? "a trainee"),
+      status: room.status as RoomStatus,
+      statusLabel: describeStatus(room.status as RoomStatus),
+      priceCents: room.priceCents,
+      yourShareCents: trainerShareCents(room.priceCents),
+      currency: room.currency,
+      createdAt: room.createdAt.toISOString(),
+    };
+  });
+
   const publicUrl = user.username
     ? `${appUrl.replace(/^https?:\/\//, "")}/${user.username}`
     : null;
@@ -181,7 +217,17 @@ export default async function Dashboard({
         )}
 
         {!user.isTrainer ? (
-          <section className="mt-10 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-6">
+          <>
+            {/* Above the coach pitch on purpose: a trainee opening the
+                dashboard is looking for the session they paid for, not for a
+                recruitment ad. Only shown when they have one. */}
+            {sessions.length > 0 && (
+              <div className="mt-10">
+                <SessionList sessions={sessions} />
+              </div>
+            )}
+
+            <section className="mt-6 rounded-xl border border-[var(--border)] bg-[var(--surface)] p-6">
             {/*
               Somebody who has already started Stripe must NOT be shown "Connect
               a Stripe account" as though nothing happened. Coming back from the
@@ -234,7 +280,8 @@ export default async function Dashboard({
             )}
 
             {devShortcutsEnabled && <DevConnect />}
-          </section>
+            </section>
+          </>
         ) : (
           <>
             <section className="mt-10 rounded-xl border border-[var(--accent)]/30 bg-[var(--accent)]/5 p-6">
@@ -267,6 +314,10 @@ export default async function Dashboard({
 
             <div className="mt-6">
               <ActiveRequests requests={activeRequests} />
+            </div>
+
+            <div className="mt-6">
+              <SessionList sessions={sessions} />
             </div>
 
             <div className="mt-6">

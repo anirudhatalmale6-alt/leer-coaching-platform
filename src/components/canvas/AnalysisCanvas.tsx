@@ -592,7 +592,7 @@ function Toolbar(props: {
           key={c}
           onClick={() => props.setColour(c)}
           aria-label={`Colour ${c}`}
-          className={`h-6 w-6 rounded-full border-2 transition ${
+          className={`h-8 w-8 rounded-full border-2 transition ${
             props.colour === c ? "border-white" : "border-transparent"
           }`}
           style={{ background: c }}
@@ -657,7 +657,10 @@ function Transport({
 
   return (
     <div className="rounded-xl border border-[var(--border)] bg-[var(--surface)] p-3">
-      <div className="flex items-center gap-2">
+      {/* flex-wrap, not a fixed row: on a phone the transport buttons plus the
+          frame readout are wider than the screen, and without wrapping the
+          readout pushed the whole page sideways. */}
+      <div className="flex flex-wrap items-center gap-2">
         <button
           onClick={() => stepper.seekToFrame(0)}
           className="rounded-md bg-[var(--surface-2)] px-3 py-2 text-sm transition hover:bg-[var(--border)]"
@@ -694,7 +697,7 @@ function Transport({
           10 ▶▶
         </button>
 
-        <div className="ml-auto flex items-center gap-4 font-mono text-xs text-[var(--muted)]">
+        <div className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-xs text-[var(--muted)]">
           <span>
             frame{" "}
             <span className="text-[var(--foreground)]">
@@ -719,7 +722,7 @@ function Transport({
           max={Math.max(0, frameCount - 1)}
           value={frame}
           onChange={(e) => stepper.seekToFrame(Number(e.target.value))}
-          className="w-full accent-[var(--accent)]"
+          className="h-8 w-full cursor-pointer accent-[var(--accent)]"
           aria-label="Timeline"
         />
         {/* Ticks where annotations exist, so a trainee can find the feedback. */}

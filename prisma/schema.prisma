@@ -202,6 +202,24 @@ model CoachingRoom {
   /// 24 hours after the authorisation. The sweep cancels anything past this
   /// that has not been delivered.
   deliverDueAt DateTime?
+
+  /// 24 hours after delivery. The sweep auto-approves anything past this that
+  /// is still `delivered` - a disputed room has a different status and is
+  /// therefore never swept, which is the safety rule for this whole feature.
+  approveDueAt DateTime?
+
+  // --- Dispute and mutual refund (Phase 2 M3) ---
+
+  /// Set when the trainee disputes the delivered feedback.
+  disputedAt     DateTime?
+  disputeReason  String?
+
+  /// A mutual-consent refund needs BOTH sides. One proposes, the other
+  /// accepts; the proposer can never accept their own - see mayAcceptRefund.
+  refundProposedById String?
+  refundProposedAt   DateTime?
+  refundReason       String?
+  refundAgreedAt     DateTime?
   paidAt       DateTime?
   deliveredAt  DateTime?
   approvedAt   DateTime?

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { refundExpiredRoom } from "@/lib/rooms";
+import { autoApproveRoom, refundExpiredRoom } from "@/lib/rooms";
 
 /**
  * The 24-hour timeout sweep, replacing the spec's BullMQ queue.
@@ -54,6 +54,8 @@ function authorise(req: Request): AuthResult {
 async function sweep() {
   const now = new Date();
 
+  // 1. Coaches who never delivered. The authorisation is cancelled, so the
+  //    trainee is never charged at all.
   const expired = await prisma.coachingRoom.findMany({
     where: { status: "awaiting_delivery", deliverDueAt: { lte: now } },
     select: { id: true, publicId: true },
@@ -71,10 +73,44 @@ async function sweep() {
     }
   }
 
-  // If we hit the cap there is more to do; say so rather than reporting a
-  // clean run and quietly leaving trainees waiting.
-  const truncated = expired.length === MAX_PER_RUN;
-  return { checked: expired.length, refunded: refunded.length, rooms: refunded, truncated };
+  /**
+   * 2. Feedback delivered, approval window lapsed, nobody disputed. Pay the
+   *    coach.
+   *
+   * THE STATUS FILTER IS THE SAFETY RULE. Only `delivered` is selected, and a
+   * disputed room has a different status, so this can never pay out money the
+   * trainee is actively contesting. `autoApproveRoom` claims the same
+   * transition conditionally, so a dispute raised between this query and the
+   * update loses nothing - the update simply matches zero rows.
+   */
+  const lapsed = await prisma.coachingRoom.findMany({
+    where: { status: "delivered", approveDueAt: { lte: now } },
+    select: { id: true, publicId: true },
+    orderBy: { approveDueAt: "asc" },
+    take: MAX_PER_RUN,
+  });
+
+  const released: string[] = [];
+  for (const room of lapsed) {
+    try {
+      await autoApproveRoom(room.id);
+      released.push(room.publicId);
+    } catch (err) {
+      console.error("[cron/sweep] auto-approve failed for", room.publicId, err);
+    }
+  }
+
+  // If we hit either cap there is more to do; say so rather than reporting a
+  // clean run and quietly leaving people waiting.
+  const truncated = expired.length === MAX_PER_RUN || lapsed.length === MAX_PER_RUN;
+  return {
+    checked: expired.length + lapsed.length,
+    refunded: refunded.length,
+    released: released.length,
+    rooms: refunded,
+    releasedRooms: released,
+    truncated,
+  };
 }
 
 export async function GET(req: Request) {

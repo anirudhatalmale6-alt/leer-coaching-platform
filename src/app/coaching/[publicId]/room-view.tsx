@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import AnalysisCanvas from "@/components/canvas/AnalysisCanvas";
 import type { RoomStatus } from "@/lib/escrow";
+import { useRouter } from "next/navigation";
 import { browserCanPlay } from "@/lib/video/codec";
 
 type Props = {
@@ -21,6 +22,12 @@ type Props = {
   annotations: string | null;
   focusNote: string | null;
   videoCodec: string | null;
+  approveDueAt: string | null;
+  disputeReason: string | null;
+  /** null = no proposal, true = I proposed it, false = the other side did. */
+  refundProposedByMe: boolean | null;
+  refundReason: string | null;
+  closeReason: string | null;
 };
 
 function money(cents: number, currency: string) {
@@ -55,10 +62,12 @@ function useCountdown(deadlineIso: string | null) {
 }
 
 export default function RoomView(props: Props) {
+  const router = useRouter();
   const [status, setStatus] = useState<RoomStatus>(props.status);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const countdown = useCountdown(props.deliverDueAt);
+  const approvalCountdown = useCountdown(props.approveDueAt);
 
   /**
    * Will THIS browser decode the clip?
@@ -72,6 +81,8 @@ export default function RoomView(props: Props) {
    * In an effect, not during render: canPlayType needs a DOM, and calling it
    * while rendering guarantees a server/client hydration mismatch.
    */
+  const [panel, setPanel] = useState<"none" | "dispute" | "refund">("none");
+  const [note, setNote] = useState("");
   const [codecUnsupported, setCodecUnsupported] = useState(false);
   useEffect(() => {
     if (!props.videoCodec) return;
@@ -83,25 +94,40 @@ export default function RoomView(props: Props) {
     setCodecUnsupported(supported === false);
   }, [props.videoCodec]);
 
-  const act = useCallback(
-    async (what: "deliver" | "approve") => {
+  const post = useCallback(
+    async (path: string, body: Record<string, unknown>) => {
       setBusy(true);
       setError(null);
       try {
-        const res = await fetch(`/api/rooms/${props.publicId}/${what}`, {
+        const res = await fetch(`/api/rooms/${props.publicId}/${path}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(what === "deliver" ? { annotations: "[]" } : {}),
+          body: JSON.stringify(body),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error ?? "That did not work.");
-        setStatus(data.status as RoomStatus);
+        if (data.status) setStatus(data.status as RoomStatus);
+        setPanel("none");
+        setNote("");
+        // Re-render the server component so the refund proposal, the dispute
+        // reason and the money figures all come from the database rather than
+        // from whatever this component happens to be holding.
+        router.refresh();
+        return true;
       } catch (err) {
         setError((err as Error).message);
+        return false;
+      } finally {
+        setBusy(false);
       }
-      setBusy(false);
     },
-    [props.publicId],
+    [props.publicId, router],
+  );
+
+  const act = useCallback(
+    (what: "deliver" | "approve") =>
+      post(what, what === "deliver" ? { annotations: "[]" } : {}),
+    [post],
   );
 
   return (
@@ -186,8 +212,102 @@ export default function RoomView(props: Props) {
 
         {status === "refunded" && (
           <div className="mt-6 rounded-lg border border-[var(--warn)]/40 bg-[var(--warn)]/10 p-4 text-sm text-[var(--warn)]">
-            The coach did not deliver in time. The authorisation was cancelled -
-            the trainee was never charged, so there is nothing to refund.
+            {/* Two very different things end as "refunded" and they must not
+                share a sentence: a coach who never showed up (nothing was ever
+                charged) and a refund both sides agreed to after delivery. */}
+            {props.closeReason === "mutual_refund" ? (
+              <>
+                Both of you agreed to a refund, and the full{" "}
+                {money(props.priceCents, props.currency)} has been returned to{" "}
+                {props.isTrainer ? props.traineeName : "you"}. It can take a few
+                days to appear on the statement.
+              </>
+            ) : (
+              <>
+                The coach did not deliver in time. The authorisation was
+                cancelled - the trainee was never charged, so there is nothing
+                to refund.
+              </>
+            )}
+          </div>
+        )}
+
+        {/* The approval clock, and the dispute that stops it. */}
+        {status === "delivered" && (
+          <div className="mt-6 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4 text-sm text-[var(--muted)]">
+            {approvalCountdown === "overdue" ? (
+              <>The approval window has passed, so this releases to the coach automatically.</>
+            ) : (
+              <>
+                {props.isTrainer ? props.traineeName + " has " : "You have "}
+                <span className="font-mono text-[var(--foreground)]">
+                  {approvalCountdown ?? "--:--:--"}
+                </span>{" "}
+                to approve or raise a problem. After that it releases to the
+                coach automatically.
+              </>
+            )}
+          </div>
+        )}
+
+        {status === "disputed" && (
+          <div className="mt-6 rounded-lg border border-[var(--warn)]/40 bg-[var(--warn)]/10 p-4">
+            <p className="text-sm font-semibold text-[var(--warn)]">
+              {props.isTrainer
+                ? props.traineeName + " has raised a problem"
+                : "You raised a problem"}
+            </p>
+            {props.disputeReason && (
+              <p className="mt-2 whitespace-pre-wrap text-sm text-[var(--foreground)]">
+                {props.disputeReason}
+              </p>
+            )}
+            <p className="mt-2 text-xs text-[var(--muted)]">
+              Nothing is released while this is open - the automatic payout is
+              paused. Sort it out between you: the trainee can approve once
+              they are happy, or either of you can offer a full refund.
+            </p>
+          </div>
+        )}
+
+        {/* A live refund offer, awaiting the other side. */}
+        {props.refundProposedByMe !== null && status !== "refunded" && (
+          <div className="mt-6 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4">
+            <p className="text-sm font-semibold">
+              {props.refundProposedByMe
+                ? "You have offered a full refund"
+                : `${props.isTrainer ? props.traineeName : props.trainerName} has offered a full refund`}
+            </p>
+            {props.refundReason && (
+              <p className="mt-2 whitespace-pre-wrap text-sm text-[var(--muted)]">
+                {props.refundReason}
+              </p>
+            )}
+            <p className="mt-2 text-xs text-[var(--muted)]">
+              {props.refundProposedByMe
+                ? "Waiting for the other person to accept. Nothing has moved yet."
+                : `Accepting returns the full ${money(props.priceCents, props.currency)} and closes this room.`}
+            </p>
+
+            <div className="mt-3 flex flex-wrap gap-3">
+              {props.refundProposedByMe ? (
+                <button
+                  onClick={() => post("refund", { action: "withdraw" })}
+                  disabled={busy}
+                  className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm transition hover:border-[var(--muted)] disabled:opacity-50"
+                >
+                  Withdraw the offer
+                </button>
+              ) : (
+                <button
+                  onClick={() => post("refund", { action: "accept" })}
+                  disabled={busy}
+                  className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-[var(--on-accent)] transition hover:brightness-110 disabled:bg-[var(--surface-2)] disabled:text-[var(--muted)]"
+                >
+                  {busy ? "Refunding..." : "Accept the refund"}
+                </button>
+              )}
+            </div>
           </div>
         )}
 
@@ -199,18 +319,6 @@ export default function RoomView(props: Props) {
             will play. Nothing is wrong with the file or the upload.
           </div>
         )}
-
-        <div className="mt-8">
-          {props.videoUrl ? (
-            <AnalysisCanvas
-              primary={{ id: "a", url: props.videoUrl, label: "Session" }}
-            />
-          ) : (
-            <div className="rounded-xl border border-dashed border-[var(--border)] p-10 text-center text-sm text-[var(--muted)]">
-              The clip could not be loaded.
-            </div>
-          )}
-        </div>
 
         <div className="mt-6 flex flex-wrap items-center gap-3">
           {props.isTrainer && status === "awaiting_delivery" && (
@@ -233,6 +341,41 @@ export default function RoomView(props: Props) {
             </button>
           )}
 
+          {/* Approving is also how a dispute ends well: the trainee talks to
+              their coach, is satisfied, and releases the money themselves. */}
+          {!props.isTrainer && status === "disputed" && (
+            <button
+              onClick={() => act("approve")}
+              disabled={busy}
+              className="rounded-lg bg-[var(--accent)] px-5 py-2.5 font-semibold text-[var(--on-accent)] transition hover:brightness-110 disabled:bg-[var(--surface-2)] disabled:text-[var(--muted)]"
+            >
+              {busy ? "Releasing..." : "It is sorted - pay the coach"}
+            </button>
+          )}
+
+          {!props.isTrainer && status === "delivered" && (
+            <button
+              onClick={() => setPanel(panel === "dispute" ? "none" : "dispute")}
+              disabled={busy}
+              className="rounded-lg border border-[var(--border)] px-4 py-2.5 text-sm transition hover:border-[var(--muted)] disabled:opacity-50"
+            >
+              Something is wrong
+            </button>
+          )}
+
+          {/* Either side may offer a refund, and only while there is money to
+              return - once released or refunded there is nothing to offer. */}
+          {props.refundProposedByMe === null &&
+            ["awaiting_delivery", "delivered", "disputed"].includes(status) && (
+              <button
+                onClick={() => setPanel(panel === "refund" ? "none" : "refund")}
+                disabled={busy}
+                className="rounded-lg border border-[var(--border)] px-4 py-2.5 text-sm text-[var(--muted)] transition hover:border-[var(--muted)] hover:text-[var(--foreground)] disabled:opacity-50"
+              >
+                Offer a full refund
+              </button>
+            )}
+
           {props.isTrainer && status === "delivered" && (
             <p className="text-sm text-[var(--muted)]">
               Delivered. Waiting for {props.traineeName} to approve.
@@ -241,6 +384,72 @@ export default function RoomView(props: Props) {
 
           {error && <p className="text-sm text-[var(--danger)]">{error}</p>}
         </div>
+
+        {panel !== "none" && (
+          <div className="mt-4 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4">
+            <p className="text-sm font-semibold">
+              {panel === "dispute"
+                ? "What was wrong with the feedback?"
+                : "Offer a full refund"}
+            </p>
+            <p className="mt-1 text-xs text-[var(--muted)]">
+              {panel === "dispute"
+                ? "Your coach sees this. Nothing is refunded automatically - it pauses the payout so the two of you can sort it out."
+                : `The other person has to accept. If they do, the full ${money(props.priceCents, props.currency)} goes back to ${props.isTrainer ? props.traineeName : "you"} and the room closes.`}
+            </p>
+            <textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value.slice(0, 500))}
+              rows={3}
+              autoFocus
+              placeholder={
+                panel === "dispute"
+                  ? "e.g. The analysis is of the wrong lift."
+                  : "Optional - a short note about why."
+              }
+              className="mt-3 w-full resize-y rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
+            />
+            <div className="mt-3 flex flex-wrap gap-3">
+              <button
+                onClick={() =>
+                  panel === "dispute"
+                    ? post("dispute", { reason: note })
+                    : post("refund", { action: "propose", reason: note })
+                }
+                disabled={busy || (panel === "dispute" && !note.trim())}
+                className="rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-[var(--on-accent)] transition hover:brightness-110 disabled:bg-[var(--surface-2)] disabled:text-[var(--muted)]"
+              >
+                {busy
+                  ? "Sending..."
+                  : panel === "dispute"
+                    ? "Raise the problem"
+                    : "Send the offer"}
+              </button>
+              <button
+                onClick={() => {
+                  setPanel("none");
+                  setNote("");
+                }}
+                className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm text-[var(--muted)] transition hover:text-[var(--foreground)]"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="mt-8">
+          {props.videoUrl ? (
+            <AnalysisCanvas
+              primary={{ id: "a", url: props.videoUrl, label: "Session" }}
+            />
+          ) : (
+            <div className="rounded-xl border border-dashed border-[var(--border)] p-10 text-center text-sm text-[var(--muted)]">
+              The clip could not be loaded.
+            </div>
+          )}
+        </div>
+
       </div>
     </main>
   );

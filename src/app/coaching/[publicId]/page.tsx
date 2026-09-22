@@ -3,7 +3,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { signPlayback, storageConfigured } from "@/lib/storage/r2";
 import { describeStatus, platformFeeCents, trainerShareCents, type RoomStatus } from "@/lib/escrow";
-import { mayViewRoom, settleIfExpired } from "@/lib/rooms";
+import { mayViewRoom, settleApprovalIfLapsed, settleIfExpired } from "@/lib/rooms";
 import RoomView from "./room-view";
 
 /**
@@ -39,11 +39,24 @@ export default async function CoachingRoomPage({
   }
   if (!mayViewRoom(room, session.user.id)) notFound();
 
-  // If the trainer's 24 hours ran out, settle it now rather than waiting for
-  // the next scheduled sweep - see settleIfExpired().
-  if (await settleIfExpired(room)) {
-    const settled = await prisma.coachingRoom.findUnique({ where: { publicId } });
-    if (settled) room.status = settled.status;
+  /**
+   * Settle anything the clock has already decided, rather than waiting for the
+   * next scheduled sweep - Vercel's free tier runs cron once a day, which
+   * would stretch a 24 hour promise to as much as 48.
+   *
+   * Two separate deadlines: the coach failing to deliver (cancel the
+   * authorisation) and the trainee's approval window lapsing (pay the coach).
+   * Both are no-ops unless genuinely due, and both claim their transition
+   * conditionally, so neither can race the sweep.
+   */
+  const settled =
+    (await settleIfExpired(room)) || (await settleApprovalIfLapsed(room));
+  if (settled) {
+    const fresh = await prisma.coachingRoom.findUnique({ where: { publicId } });
+    if (fresh) {
+      room.status = fresh.status;
+      room.closeReason = fresh.closeReason;
+    }
   }
 
   const isTrainer = session.user.id === room.trainerId;
@@ -75,6 +88,13 @@ export default async function CoachingRoomPage({
       annotations={room.annotations}
       focusNote={room.focusNote}
       videoCodec={room.videoCodec}
+      approveDueAt={room.approveDueAt?.toISOString() ?? null}
+      disputeReason={room.disputeReason}
+      refundProposedByMe={
+        room.refundProposedById ? room.refundProposedById === session.user.id : null
+      }
+      refundReason={room.refundReason}
+      closeReason={room.closeReason}
     />
   );
 }

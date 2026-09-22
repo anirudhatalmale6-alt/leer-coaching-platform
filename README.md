@@ -618,3 +618,80 @@ What changed:
 Falsified, not assumed: reverting `summariseRequirements` to treat every
 requirement as blocking makes his exact account state render "ACTION NEEDED"
 instead of "You are fully set up" - which is what he saw.
+
+---
+
+## Phase 2, M3 - disputes, mutual refunds, auto-approval
+
+Three things that finish the escrow: the trainee can say "this is wrong", both
+sides can agree to a refund, and money does not sit in limbo when nobody acts.
+
+### Auto-approval
+
+Delivery sets `approveDueAt = deliveredAt + 24h`. The sweep releases anything
+still `delivered` past that, paying the coach their 80%.
+
+**The status filter is the safety rule.** The sweep only ever selects
+`delivered`; a disputed room has a different status, so the automatic payout
+can never fire on money the trainee is actively contesting. The transition is
+also claimed conditionally, so a dispute raised between the query and the
+update simply matches zero rows. There is a test that reintroduces the bug -
+widening the sweep to include `disputed` - and it releases the disputed room,
+which is exactly the failure the check exists to catch.
+
+The room page also settles on view (`settleApprovalIfLapsed`), for the same
+reason the timeout does: Vercel's free tier runs cron once a day, which would
+stretch a 24 hour promise to 48.
+
+### Disputes
+
+A dispute **stops the clock and moves no money.** LEER is not a judge, and a
+self-service refund button after receiving the work would be a way to get
+coaching for free. It ends one of two ways: the trainee approves after all
+(the ordinary happy ending - people talk), or both sides agree to a refund.
+
+`disputed` deliberately cannot return to `delivered`. Re-opening the approval
+clock would let a room bounce between states and make the deadline meaningless.
+
+### Mutual-consent refund
+
+Either party proposes, **the other** accepts. `mayAcceptRefund` refuses to let
+the proposer accept their own - without that, "mutual consent" is a one-sided
+refund button. The proposer can withdraw while it is still unanswered.
+
+### What a refund actually costs - measured, not assumed
+
+The client's spec describes a mutual refund as "0% fees charged". That is true
+for the trainee and **not** true for the platform, and the difference is worth
+knowing before it appears in marketing copy.
+
+The API reference cannot answer this - fee retention is a pricing policy, not a
+field - so it was measured against the live Stripe test API:
+
+| | amount | fee | net |
+| --- | --- | --- | --- |
+| charge | 6500 | 219 | 6281 |
+| refund | -6500 | **0** | -6500 |
+
+The refund's balance transaction carries `fee: 0` and no fee details. On a
+$65.00 booking Stripe keeps its $2.19 and the platform absorbs it. The trainee
+gets every cent back.
+
+**So the code cancels rather than refunds wherever it can.** Before delivery
+the payment is only authorised: cancelling costs nothing and leaves nothing on
+the trainee's statement. Only after capture does a refund become necessary, and
+`returnTraineeMoney` picks the right one from the room's status. The end-to-end
+test asserts both paths - that a pre-delivery refund leaves the PaymentIntent
+`canceled`, and that a post-delivery one produces a real `re_...` refund for
+the full amount.
+
+### How it was verified
+
+`npm test` covers the state machine. The flow itself was driven end to end
+through the app's own HTTP endpoints, against real Stripe test-mode
+PaymentIntents - 16 checks including the authorisation rules (a coach cannot
+dispute their own delivery, a stranger gets a 404) and the two money guards.
+Both guards were then falsified by breaking them:
+
+- letting the sweep pick up `disputed` rooms → the disputed room was released
+- letting the proposer accept their own offer → the self-accept returned 200

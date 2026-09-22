@@ -35,6 +35,16 @@
 export const PLATFORM_FEE_BPS = 2000; // 20%, in basis points
 export const DELIVERY_WINDOW_HOURS = 24;
 
+/**
+ * How long the trainee has to approve or dispute after the coach delivers.
+ *
+ * The client settled this: 24h auto-approval wins and the spec's 72h revision
+ * window is scrapped. When it lapses with no dispute, the cron releases the
+ * money - the coach has done the work and must not wait on an inattentive
+ * trainee.
+ */
+export const APPROVAL_WINDOW_HOURS = 24;
+
 /** Coaching pass price bounds, from the spec. */
 export const MIN_PRICE_CENTS = 30_00;
 export const MAX_PRICE_CENTS = 500_00;
@@ -43,6 +53,7 @@ export type RoomStatus =
   | "awaiting_payment"
   | "awaiting_delivery"
   | "delivered"
+  | "disputed"
   | "released"
   | "refunded"
   | "cancelled";
@@ -86,6 +97,61 @@ export function deliveryDeadline(paidAt: Date): Date {
   return new Date(paidAt.getTime() + DELIVERY_WINDOW_HOURS * 60 * 60 * 1000);
 }
 
+/** When the trainee's window to approve or dispute runs out. */
+export function approvalDeadline(deliveredAt: Date): Date {
+  return new Date(deliveredAt.getTime() + APPROVAL_WINDOW_HOURS * 60 * 60 * 1000);
+}
+
+/**
+ * Should this room be auto-approved and paid out?
+ *
+ * THE STATUS CHECK IS THE SAFETY RULE. A disputed room has a different status,
+ * so it can never be swept into a payout while the two sides are still
+ * arguing - which would be the worst possible failure of this feature:
+ * the platform paying out the money the trainee is actively contesting.
+ */
+export function isAutoApprovable(
+  room: { status: string; approveDueAt: Date | null },
+  now: Date,
+): boolean {
+  if (room.status !== "delivered") return false;
+  if (!room.approveDueAt) return false;
+  return room.approveDueAt.getTime() <= now.getTime();
+}
+
+/**
+ * Who may still act on a mutual refund proposal.
+ *
+ * A proposal needs the OTHER party to accept it. Letting the proposer accept
+ * their own would turn "mutual consent" into a one-sided refund button - a
+ * trainee could take the feedback and then refund themselves.
+ */
+export function mayAcceptRefund(
+  proposal: { proposedById: string | null },
+  userId: string,
+): boolean {
+  return Boolean(proposal.proposedById) && proposal.proposedById !== userId;
+}
+
+/**
+ * What a full refund costs the platform.
+ *
+ * MEASURED against the live Stripe test API, not assumed: on a $65.00 charge
+ * Stripe took $2.19 and returned NONE of it on a full refund. The refund's
+ * balance transaction carries `fee: 0` and no fee details, so the platform is
+ * simply out the original processing fee.
+ *
+ * Consequence for the product: a refund is free for the trainee - they get
+ * every cent back - but it is NOT free for LEER. Before delivery the money is
+ * only authorised, so cancelling costs nothing; after delivery it has been
+ * captured and a refund costs the fee. Cancel where possible, refund only
+ * where necessary.
+ */
+export function refundCostsPlatformFee(room: { status: string }): boolean {
+  // Only a captured payment has had a fee taken. Delivery is what captures.
+  return room.status === "delivered" || room.status === "disputed";
+}
+
 /**
  * Legal transitions. Anything not listed is rejected.
  *
@@ -97,7 +163,14 @@ export function deliveryDeadline(paidAt: Date): Date {
 const TRANSITIONS: Record<RoomStatus, RoomStatus[]> = {
   awaiting_payment: ["awaiting_delivery", "cancelled"],
   awaiting_delivery: ["delivered", "refunded", "cancelled"],
-  delivered: ["released", "refunded"],
+  delivered: ["released", "refunded", "disputed"],
+  /**
+   * A dispute can end two ways and only two ways: the trainee accepts the work
+   * after all, or both sides agree to a refund. It deliberately cannot go back
+   * to `delivered` - re-opening the approval clock after a dispute would let a
+   * room bounce between states and make the auto-approval deadline meaningless.
+   */
+  disputed: ["released", "refunded"],
   // Terminal.
   released: [],
   refunded: [],
@@ -137,6 +210,8 @@ export function describeStatus(status: RoomStatus): string {
       return "With your coach";
     case "delivered":
       return "Feedback ready for review";
+    case "disputed":
+      return "Disputed - being resolved";
     case "released":
       return "Complete - coach paid";
     case "refunded":

@@ -3,10 +3,13 @@ import { prisma } from "./prisma";
 import { getStripe } from "./stripe";
 import { appUrl } from "./env";
 import {
+  approvalDeadline,
   canTransition,
   deliveryDeadline,
+  isAutoApprovable,
   isExpired,
   isValidPrice,
+  mayAcceptRefund,
   trainerShareCents,
   type RoomStatus,
 } from "./escrow";
@@ -255,8 +258,12 @@ export async function deliverRoom(roomId: string, trainerId: string, annotations
   // Claim the transition BEFORE calling Stripe. If the capture then fails we
   // roll back; the alternative - capture first, write second - can take the
   // trainee's money and lose the record of why.
+  const deliveredAt = new Date();
   const claimed = await advance(roomId, "awaiting_delivery", "delivered", {
-    deliveredAt: new Date(),
+    deliveredAt,
+    // Starts the trainee's 24 hours to approve or dispute. Without this the
+    // auto-approval sweep has no deadline to read and the coach waits forever.
+    approveDueAt: approvalDeadline(deliveredAt),
     annotations,
   });
   if (!claimed) throw new RoomError("This room was already handled.", 409);
@@ -266,7 +273,7 @@ export async function deliverRoom(roomId: string, trainerId: string, annotations
   } catch (err) {
     await prisma.coachingRoom.updateMany({
       where: { id: roomId, status: "delivered" },
-      data: { status: "awaiting_delivery", deliveredAt: null },
+      data: { status: "awaiting_delivery", deliveredAt: null, approveDueAt: null },
     });
     throw err;
   }
@@ -281,6 +288,47 @@ export async function deliverRoom(roomId: string, trainerId: string, annotations
  * application_fee_amount on a separate charge and transfer.
  */
 export async function approveRoom(roomId: string, traineeId: string) {
+  const room = await prisma.coachingRoom.findUnique({ where: { id: roomId } });
+  if (!room) throw new RoomError("Room not found.", 404);
+  if (room.traineeId !== traineeId) throw new RoomError("Not your room.", 403);
+
+  /**
+   * Approving from `disputed` is deliberate: a trainee who raised a dispute
+   * and then talked it through with their coach must be able to say "this is
+   * fine now" without anyone from LEER intervening. It is the ordinary happy
+   * ending to a dispute.
+   */
+  if (room.status !== "delivered" && room.status !== "disputed") {
+    throw new RoomError("Nothing to approve yet.", 409);
+  }
+
+  return payOutTrainer(roomId, room.status, "trainee_approved");
+}
+
+/**
+ * The 24 hour approval window lapsed with no dispute. Pay the coach.
+ *
+ * Called only by the sweep, never by a user, and only from `delivered` - a
+ * disputed room has a different status and so can never be swept into a
+ * payout while the two sides are still arguing. That is the safety rule for
+ * this entire feature.
+ */
+export async function autoApproveRoom(roomId: string) {
+  return payOutTrainer(roomId, "delivered", "auto_approved");
+}
+
+/**
+ * Release the escrow: claim the transition, then transfer the trainer's 80%.
+ *
+ * Shared by the trainee's approval and the automatic one so there is exactly
+ * one piece of code that moves money to a coach. Two near-identical copies is
+ * how one of them quietly grows a different fee calculation.
+ */
+async function payOutTrainer(
+  roomId: string,
+  from: "delivered" | "disputed",
+  closeReason: string,
+) {
   const stripe = getStripe();
   if (!stripe) throw new RoomError("Payments are not configured.", 503);
 
@@ -289,16 +337,16 @@ export async function approveRoom(roomId: string, traineeId: string) {
     include: { trainer: true },
   });
   if (!room) throw new RoomError("Room not found.", 404);
-  if (room.traineeId !== traineeId) throw new RoomError("Not your room.", 403);
-  if (room.status !== "delivered") throw new RoomError("Nothing to approve yet.", 409);
   if (!room.trainer.stripeAccountId) throw new RoomError("Coach has no payout account.", 409);
 
-  const claimed = await advance(roomId, "delivered", "released", {
-    approvedAt: new Date(),
-    closedAt: new Date(),
+  const now = new Date();
+  const claimed = await advance(roomId, from, "released", {
+    approvedAt: now,
+    closedAt: now,
+    closeReason,
   });
-  // Zero rows means a concurrent approval already paid out. Stop, do not
-  // transfer again.
+  // Zero rows means a concurrent approval already paid out - or the trainee
+  // disputed a moment before the sweep reached this room. Either way, stop.
   if (!claimed) throw new RoomError("This room was already completed.", 409);
 
   const amount = trainerShareCents(room.priceCents);
@@ -320,7 +368,7 @@ export async function approveRoom(roomId: string, traineeId: string) {
       data: { transferId: transfer.id },
     });
   } catch (err) {
-    // The room stays 'released' - the trainee has approved and the money is
+    // The room stays 'released' - the work was accepted and the money is
     // captured. A failed transfer is an operational problem to retry, not a
     // reason to un-approve and re-charge anybody.
     console.error("[rooms] transfer failed for", room.id, err);
@@ -416,4 +464,206 @@ export function mayViewRoom(
 ): boolean {
   if (!userId) return false;
   return userId === room.traineeId || userId === room.trainerId;
+}
+
+// --- Disputes and mutual-consent refunds (Phase 2 M3) ---
+
+/**
+ * The trainee says the feedback is not acceptable.
+ *
+ * This STOPS THE AUTO-APPROVAL CLOCK, which is its main job: a disputed room
+ * has a different status, and the sweep only ever touches `delivered`, so the
+ * money cannot be released underneath an unresolved complaint.
+ *
+ * It deliberately does not refund anything. LEER is not a judge, and an
+ * instant self-service refund after receiving the work would be a way to get
+ * coaching for free. Resolution is either the trainee approving after all, or
+ * both sides agreeing to a refund.
+ */
+export async function disputeRoom(roomId: string, traineeId: string, reason: string) {
+  const room = await prisma.coachingRoom.findUnique({ where: { id: roomId } });
+  if (!room) throw new RoomError("Room not found.", 404);
+  if (room.traineeId !== traineeId) throw new RoomError("Only the trainee can dispute.", 403);
+  if (room.status !== "delivered") {
+    throw new RoomError(
+      room.status === "disputed"
+        ? "This room is already under dispute."
+        : "There is nothing to dispute in this room.",
+      409,
+    );
+  }
+
+  const claimed = await advance(roomId, "delivered", "disputed", {
+    disputedAt: new Date(),
+    disputeReason: reason,
+  });
+  if (!claimed) {
+    // Lost a race with the sweep or with the trainee's own approval.
+    throw new RoomError("This room has already been settled.", 409);
+  }
+  return prisma.coachingRoom.findUnique({ where: { id: roomId } });
+}
+
+/** Either party offers to end the room with a full refund to the trainee. */
+export async function proposeRefund(roomId: string, userId: string, reason: string) {
+  const room = await prisma.coachingRoom.findUnique({ where: { id: roomId } });
+  if (!room) throw new RoomError("Room not found.", 404);
+  if (!mayViewRoom(room, userId)) throw new RoomError("Not your room.", 403);
+
+  const REFUNDABLE = ["awaiting_delivery", "delivered", "disputed"];
+  if (!REFUNDABLE.includes(room.status)) {
+    throw new RoomError("This room can no longer be refunded.", 409);
+  }
+  if (room.refundProposedById && !room.refundAgreedAt) {
+    throw new RoomError("A refund has already been proposed for this room.", 409);
+  }
+
+  return prisma.coachingRoom.update({
+    where: { id: roomId },
+    data: {
+      refundProposedById: userId,
+      refundProposedAt: new Date(),
+      refundReason: reason || null,
+    },
+  });
+}
+
+/** The proposer changes their mind before the other side answers. */
+export async function withdrawRefundProposal(roomId: string, userId: string) {
+  const room = await prisma.coachingRoom.findUnique({ where: { id: roomId } });
+  if (!room) throw new RoomError("Room not found.", 404);
+  if (room.refundProposedById !== userId) {
+    throw new RoomError("Only whoever proposed it can withdraw it.", 403);
+  }
+  if (room.refundAgreedAt) throw new RoomError("That refund has already been agreed.", 409);
+
+  return prisma.coachingRoom.update({
+    where: { id: roomId },
+    data: { refundProposedById: null, refundProposedAt: null, refundReason: null },
+  });
+}
+
+/**
+ * The other party accepts. This is the point where money actually moves.
+ *
+ * `mayAcceptRefund` enforces that the acceptor is not the proposer. Without
+ * that, "mutual consent" would be a one-sided refund button and a trainee
+ * could take the feedback and then refund themselves.
+ */
+export async function acceptRefund(roomId: string, userId: string) {
+  const room = await prisma.coachingRoom.findUnique({ where: { id: roomId } });
+  if (!room) throw new RoomError("Room not found.", 404);
+  if (!mayViewRoom(room, userId)) throw new RoomError("Not your room.", 403);
+  if (!room.refundProposedById) throw new RoomError("Nobody has proposed a refund.", 409);
+  if (!mayAcceptRefund({ proposedById: room.refundProposedById }, userId)) {
+    throw new RoomError("The other person has to accept this, not you.", 403);
+  }
+
+  const from = room.status as RoomStatus;
+  if (from !== "awaiting_delivery" && from !== "delivered" && from !== "disputed") {
+    throw new RoomError("This room can no longer be refunded.", 409);
+  }
+
+  const now = new Date();
+  const claimed = await advance(roomId, from, "refunded", {
+    refundAgreedAt: now,
+    closedAt: now,
+    closeReason: "mutual_refund",
+  });
+  if (!claimed) throw new RoomError("This room has already been settled.", 409);
+
+  await returnTraineeMoney(room);
+  return prisma.coachingRoom.findUnique({ where: { id: roomId } });
+}
+
+/**
+ * Give the trainee their money back, the cheapest correct way.
+ *
+ * CANCEL, NOT REFUND, WHERE POSSIBLE. Before delivery the payment is only
+ * authorised: cancelling means the trainee was never charged, there is nothing
+ * on their statement, and it costs nobody anything. After delivery the money
+ * has been captured, so it must be a real refund - and that is NOT free for
+ * the platform.
+ *
+ * Measured against the live Stripe test API rather than assumed: a $65.00
+ * charge cost $2.19 in processing fees, and refunding it returned none of it
+ * (the refund's balance transaction has `fee: 0`). The trainee gets every cent
+ * back; LEER absorbs the fee. See refundCostsPlatformFee().
+ */
+async function returnTraineeMoney(room: {
+  id: string;
+  status: string;
+  paymentIntentId: string | null;
+}) {
+  const stripe = getStripe();
+  if (!stripe) throw new RoomError("Payments are not configured.", 503);
+  if (!room.paymentIntentId) return;
+
+  const captured = room.status === "delivered" || room.status === "disputed";
+
+  try {
+    if (captured) {
+      const refund = await stripe.refunds.create(
+        {
+          payment_intent: room.paymentIntentId,
+          // NOT refund_application_fee and NOT reverse_transfer: under separate
+          // charges and transfers there is no application fee, and no transfer
+          // has been made - the coach is only paid on release.
+          metadata: { leerRoomId: room.id, leerReason: "mutual_refund" },
+        },
+        { idempotencyKey: `leer-refund-${room.id}` },
+      );
+      await prisma.coachingRoom.update({
+        where: { id: room.id },
+        data: { refundId: refund.id },
+      });
+    } else {
+      const cancelled = await stripe.paymentIntents.cancel(room.paymentIntentId, {
+        cancellation_reason: "requested_by_customer",
+      });
+      await prisma.coachingRoom.update({
+        where: { id: room.id },
+        data: { refundId: cancelled.id },
+      });
+    }
+  } catch (err) {
+    /**
+     * The room stays `refunded`: both parties agreed, and reversing that
+     * because Stripe hiccupped would be worse than a retry. Surfaced loudly
+     * rather than swallowed - money owed to a trainee and not sent is exactly
+     * the thing that must never be silent.
+     */
+    console.error("[rooms] refund failed for", room.id, err);
+    await prisma.coachingRoom.update({
+      where: { id: room.id },
+      data: { closeReason: "refund_pending" },
+    });
+  }
+}
+
+/**
+ * Auto-approve this one room if its approval window has lapsed.
+ *
+ * Same reasoning as settleIfExpired: Vercel's free tier runs cron ONCE A DAY,
+ * which would stretch "released after 24 hours" to as much as 48. Checking
+ * whenever somebody opens the room means the common case resolves immediately
+ * however often the scheduler runs.
+ *
+ * Safe to call on every render: a no-op unless the room is genuinely past its
+ * deadline AND still `delivered`, and the transition is claimed conditionally
+ * so it cannot race the sweep into a double payout.
+ */
+export async function settleApprovalIfLapsed(room: {
+  id: string;
+  status: string;
+  approveDueAt: Date | null;
+}): Promise<boolean> {
+  if (!isAutoApprovable(room, new Date())) return false;
+  try {
+    await autoApproveRoom(room.id);
+    return true;
+  } catch (err) {
+    console.error("[rooms] opportunistic auto-approve failed for", room.id, err);
+    return false;
+  }
 }

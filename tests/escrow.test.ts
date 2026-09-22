@@ -4,12 +4,16 @@ import {
   DELIVERY_WINDOW_HOURS,
   MAX_PRICE_CENTS,
   MIN_PRICE_CENTS,
+  approvalDeadline,
   canTransition,
   deliveryDeadline,
+  isAutoApprovable,
   isExpired,
   isTerminal,
   isValidPrice,
+  mayAcceptRefund,
   platformFeeCents,
+  refundCostsPlatformFee,
   trainerShareCents,
   type RoomStatus,
 } from "../src/lib/escrow";
@@ -184,5 +188,115 @@ describe("state machine", () => {
       // Throws or returns undefined if a status were missing from TRANSITIONS.
       assert.equal(typeof isTerminal(s), "boolean", s);
     }
+  });
+});
+
+describe("disputes and auto-approval (P2-M3)", () => {
+  test("a delivered room can be disputed", () => {
+    assert.equal(canTransition("delivered", "disputed"), true);
+  });
+
+  test("a dispute ends only as released or refunded", () => {
+    assert.equal(canTransition("disputed", "released"), true);
+    assert.equal(canTransition("disputed", "refunded"), true);
+    // Going back would restart the approval clock and make the auto-approval
+    // deadline meaningless.
+    assert.equal(canTransition("disputed", "delivered"), false);
+    assert.equal(canTransition("disputed", "cancelled"), false);
+    assert.equal(canTransition("disputed", "disputed"), false);
+  });
+
+  test("a dispute cannot be raised once the money has moved", () => {
+    assert.equal(canTransition("released", "disputed"), false);
+    assert.equal(canTransition("refunded", "disputed"), false);
+    assert.equal(canTransition("cancelled", "disputed"), false);
+  });
+
+  test("you cannot dispute before the coach has delivered", () => {
+    // There is nothing to dispute yet, and the timeout refund already covers
+    // a coach who never shows up.
+    assert.equal(canTransition("awaiting_delivery", "disputed"), false);
+    assert.equal(canTransition("awaiting_payment", "disputed"), false);
+  });
+
+  test("disputed is not terminal, released and refunded are", () => {
+    assert.equal(isTerminal("disputed"), false);
+    assert.equal(isTerminal("released"), true);
+    assert.equal(isTerminal("refunded"), true);
+  });
+});
+
+describe("approvalDeadline", () => {
+  test("is 24 hours after delivery", () => {
+    const delivered = new Date("2026-09-21T10:00:00.000Z");
+    assert.equal(approvalDeadline(delivered).toISOString(), "2026-09-22T10:00:00.000Z");
+  });
+});
+
+describe("isAutoApprovable", () => {
+  const now = new Date("2026-09-22T12:00:00.000Z");
+  const past = new Date("2026-09-22T11:00:00.000Z");
+  const future = new Date("2026-09-22T13:00:00.000Z");
+
+  test("releases a delivered room once the window has lapsed", () => {
+    assert.equal(isAutoApprovable({ status: "delivered", approveDueAt: past }, now), true);
+  });
+
+  test("waits while the window is still open", () => {
+    assert.equal(isAutoApprovable({ status: "delivered", approveDueAt: future }, now), false);
+  });
+
+  test("NEVER auto-approves a disputed room", () => {
+    // The worst failure this feature could have: paying out money the trainee
+    // is actively contesting.
+    assert.equal(isAutoApprovable({ status: "disputed", approveDueAt: past }, now), false);
+  });
+
+  test("ignores rooms in every other state", () => {
+    for (const status of ["awaiting_payment", "awaiting_delivery", "released", "refunded", "cancelled"]) {
+      assert.equal(
+        isAutoApprovable({ status, approveDueAt: past }, now),
+        false,
+        `${status} must not auto-approve`,
+      );
+    }
+  });
+
+  test("a room with no deadline is never swept", () => {
+    assert.equal(isAutoApprovable({ status: "delivered", approveDueAt: null }, now), false);
+  });
+
+  test("the boundary releases rather than hanging", () => {
+    assert.equal(isAutoApprovable({ status: "delivered", approveDueAt: now }, now), true);
+  });
+});
+
+describe("mayAcceptRefund", () => {
+  test("the other party may accept", () => {
+    assert.equal(mayAcceptRefund({ proposedById: "trainer-1" }, "trainee-1"), true);
+  });
+
+  test("THE PROPOSER MAY NOT ACCEPT THEIR OWN", () => {
+    // Otherwise "mutual consent" is a one-sided refund button: a trainee could
+    // take the feedback and then refund themselves.
+    assert.equal(mayAcceptRefund({ proposedById: "trainee-1" }, "trainee-1"), false);
+  });
+
+  test("nothing to accept when nobody has proposed", () => {
+    assert.equal(mayAcceptRefund({ proposedById: null }, "trainee-1"), false);
+  });
+});
+
+describe("refundCostsPlatformFee", () => {
+  test("after capture, the platform eats Stripe's fee", () => {
+    // Measured on the live test API: a $65.00 charge cost $2.19 and the refund
+    // returned none of it.
+    assert.equal(refundCostsPlatformFee({ status: "delivered" }), true);
+    assert.equal(refundCostsPlatformFee({ status: "disputed" }), true);
+  });
+
+  test("before capture there is nothing to lose - it is only an authorisation", () => {
+    assert.equal(refundCostsPlatformFee({ status: "awaiting_delivery" }), false);
+    assert.equal(refundCostsPlatformFee({ status: "awaiting_payment" }), false);
   });
 });

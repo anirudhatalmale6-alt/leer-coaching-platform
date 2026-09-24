@@ -28,6 +28,16 @@ type Props = {
   primary: CanvasSource;
   /** Second clip for the split-screen comparison. Optional. */
   secondary?: CanvasSource;
+  /**
+   * Trainee view: the marks are the coach's work, so they are shown but not
+   * editable.
+   *
+   * This is HONESTY, not a security boundary - the server already refuses to
+   * save annotations from anyone but the room's coach (deliverRoom checks
+   * trainerId). What it removes is a toolbar that invited a trainee to draw
+   * over their feedback and then lose it, which looked like a bug.
+   */
+  readOnly?: boolean;
 };
 
 /**
@@ -37,7 +47,7 @@ type Props = {
  * 2D canvas above it for annotations. Pointer events land on the 2D layer,
  * which owns the coordinate maths, and the WebGL layer just paints pixels.
  */
-export default function AnalysisCanvas({ primary, secondary }: Props) {
+export default function AnalysisCanvas({ primary, secondary, readOnly = false }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const controlsRef = useRef<HTMLDivElement>(null);
 
@@ -71,6 +81,16 @@ export default function AnalysisCanvas({ primary, secondary }: Props) {
   const [offsetB, setOffsetB] = useState(0);
 
   const stepper = useFrameStepper(videoARef);
+
+  /**
+   * The split-screen clip has to run at the same speed as the primary, or the
+   * two drift apart - which defeats the entire point of comparing them.
+   * useFrameStepper only owns video A, so B is matched here.
+   */
+  useEffect(() => {
+    const b = videoBRef.current;
+    if (b) b.playbackRate = stepper.playbackRate;
+  }, [stepper.playbackRate]);
   const dragRef = useRef<{ id: string; index: number } | null>(null);
 
   /**
@@ -307,6 +327,11 @@ export default function AnalysisCanvas({ primary, secondary }: Props) {
 
   const onPointerDown = useCallback(
     (e: React.PointerEvent<HTMLCanvasElement>) => {
+      // Inert, not merely hidden. Hiding the toolbar leaves the drawing
+      // surface live, and a stylus, a stale tool state or a future keyboard
+      // shortcut would still start a mark that the server then refuses to
+      // save - losing the trainee's work silently.
+      if (readOnly) return;
       const hit = locate(e.clientX, e.clientY);
       if (!hit) return;
       (e.target as HTMLCanvasElement).setPointerCapture(e.pointerId);
@@ -352,7 +377,7 @@ export default function AnalysisCanvas({ primary, secondary }: Props) {
       setPending([]);
       setSelected(id);
     },
-    [locate, tool, pending, seq, stepper.frame, colour, annotations, viewports],
+    [locate, tool, pending, seq, stepper.frame, colour, annotations, viewports, readOnly],
   );
 
   const onPointerMove = useCallback(
@@ -448,6 +473,7 @@ export default function AnalysisCanvas({ primary, secondary }: Props) {
 
   return (
     <div className="flex flex-col gap-3">
+      {!readOnly && (
       <Toolbar
         tool={tool}
         setTool={(t) => { setTool(t); setPending([]); }}
@@ -464,6 +490,16 @@ export default function AnalysisCanvas({ primary, secondary }: Props) {
         onClearAll={() => { setAnnotations([]); setSelected(null); }}
         annotationCount={annotations.length}
       />
+      )}
+
+      {/* A trainee is told why there are no tools, rather than left wondering
+          whether the page is broken. */}
+      {readOnly && (
+        <p className="rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-4 py-2.5 text-xs text-[var(--muted)]">
+          Your coach&rsquo;s marks are shown on the clip. Step through the
+          frames and change the speed below - the drawing tools are theirs.
+        </p>
+      )}
 
       {/*
         The stage is capped so the toolbar, transport row and timeline stay on
@@ -761,6 +797,26 @@ function Transport({
           10 ▶▶
         </button>
 
+        {/* Slow motion, per the client's request: form breaks down in the
+            frames between the ones you notice at full speed. */}
+        <div className="flex items-center gap-1 rounded-md bg-[var(--surface-2)] p-1">
+          {[0.25, 0.5, 1].map((rate) => (
+            <button
+              key={rate}
+              onClick={() => stepper.setPlaybackRate(rate)}
+              aria-pressed={stepper.playbackRate === rate}
+              title={rate === 1 ? "Normal speed" : `${rate}x slow motion`}
+              className={`rounded px-2.5 py-1.5 text-xs font-semibold transition ${
+                stepper.playbackRate === rate
+                  ? "bg-[var(--accent)] text-[var(--on-accent)]"
+                  : "text-[var(--muted)] hover:text-[var(--foreground)]"
+              }`}
+            >
+              {rate === 1 ? "1x" : `${rate}x`}
+            </button>
+          ))}
+        </div>
+
         <div className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-xs text-[var(--muted)]">
           <span>
             frame{" "}
@@ -770,7 +826,15 @@ function Transport({
             / {frameCount ? frameCount - 1 : 0}
           </span>
           <span>{formatTimecode(frameCount ? frame / fps : 0)}</span>
-          <span title={fpsMeasured ? "Measured from playback" : "Assumed until playback measures it"}>
+          <span
+            title={
+              stepper.playbackRate !== 1
+                ? "Frame rate is only measured at 1x"
+                : fpsMeasured
+                  ? "Measured from playback"
+                  : "Assumed until playback measures it"
+            }
+          >
             {fps} fps{fpsMeasured ? "" : "?"}
           </span>
           {onThisFrame > 0 && (

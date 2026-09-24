@@ -161,7 +161,9 @@ export default async function Dashboard({
         ? (room.trainer.name ?? room.trainer.username ?? "your coach")
         : (room.trainee.name ?? room.trainee.email?.split("@")[0] ?? "a trainee"),
       status: room.status as RoomStatus,
-      statusLabel: describeStatus(room.status as RoomStatus),
+      // Each row is labelled from the side the viewer is on in THAT room -
+      // the same person is the coach in some and the trainee in others.
+      statusLabel: describeStatus(room.status as RoomStatus, iAmTrainee ? "trainee" : "trainer"),
       priceCents: room.priceCents,
       yourShareCents: trainerShareCents(room.priceCents),
       currency: room.currency,

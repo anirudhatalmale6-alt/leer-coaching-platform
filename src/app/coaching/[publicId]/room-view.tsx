@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import AnalysisCanvas from "@/components/canvas/AnalysisCanvas";
 import type { RoomStatus } from "@/lib/escrow";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { browserCanPlay } from "@/lib/video/codec";
 
@@ -135,7 +136,16 @@ export default function RoomView(props: Props) {
       <div className="mx-auto max-w-6xl px-6 py-10">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <p className="text-xs font-semibold tracking-[0.3em] text-[var(--muted)]">
+            {/* A real way out. Relying on the browser's back button breaks the
+                moment somebody arrives from a Stripe redirect or an emailed
+                link, where "back" is the payment page or nothing at all. */}
+            <Link
+              href="/dashboard"
+              className="inline-flex items-center gap-1 text-xs text-[var(--muted)] transition hover:text-[var(--foreground)]"
+            >
+              &larr; Back to dashboard
+            </Link>
+            <p className="mt-2 text-xs font-semibold tracking-[0.3em] text-[var(--muted)]">
               COACHING ROOM
             </p>
             <h1 className="mt-2 text-2xl font-semibold">
@@ -459,6 +469,7 @@ export default function RoomView(props: Props) {
           {props.videoUrl ? (
             <AnalysisCanvas
               primary={{ id: "a", url: props.videoUrl, label: "Session" }}
+              readOnly={!props.isTrainer}
             />
           ) : (
             <div className="rounded-xl border border-dashed border-[var(--border)] p-10 text-center text-sm text-[var(--muted)]">

@@ -136,6 +136,28 @@ export function useFrameStepper(videoRef: React.RefObject<HTMLVideoElement | nul
     [seekToFrame, videoRef],
   );
 
+  /**
+   * Slow motion, for form analysis.
+   *
+   * Held in a ref as well as state because the frame callback needs to read it
+   * without being re-created (re-creating that effect cancels and restarts the
+   * callback chain mid-playback).
+   */
+  const [playbackRate, setRate] = useState(1);
+  const rateRef = useRef(1);
+
+  const setPlaybackRate = useCallback(
+    (rate: number) => {
+      rateRef.current = rate;
+      setRate(rate);
+      const v = videoRef.current;
+      if (v) v.playbackRate = rate;
+      // Any half-built fps sample was taken at the old rate; throw it away.
+      sampleRef.current = null;
+    },
+    [videoRef],
+  );
+
   const togglePlay = useCallback(() => {
     const v = videoRef.current;
     if (!v) return;
@@ -194,7 +216,29 @@ export function useFrameStepper(videoRef: React.RefObject<HTMLVideoElement | nul
         // fps, it also clamps the timeline to a fraction of its real length.
         // Symptom seen in testing: after a few 10-frame jumps the playhead
         // refused to pass frame 29 on a 300 frame clip.
-        if (!sampleRef.current) {
+        /**
+         * Only measure the frame rate at 1.0x.
+         *
+         * MEASURED, not assumed: with this guard removed, Chromium still
+         * reported a correct 30fps while playing at 0.25x, so its
+         * `presentedFrames` counts distinct media frames rather than
+         * compositor repeats. The failure I expected does not happen there.
+         *
+         * The guard stays anyway, because the spec says `presentedFrames` is
+         * the count of frames "submitted for composition" and does not promise
+         * that a repeated frame is excluded - a browser that counts repeats
+         * would report a wildly high rate during slow motion. That number
+         * drives every frame index and the length of the timeline, so the cost
+         * of being wrong is frame numbers a coach cannot trust, while the cost
+         * of the guard is only that fps is measured during normal playback
+         * instead of slow motion.
+         *
+         * Same reasoning as refusing to sample across a seek, which really did
+         * collapse the measurement to 3fps and clamp a 300 frame clip at 29.
+         */
+        if (rateRef.current !== 1) {
+          sampleRef.current = null;
+        } else if (!sampleRef.current) {
           sampleRef.current = meta;
         } else {
           const measured = estimateFps(sampleRef.current, meta);
@@ -243,6 +287,8 @@ export function useFrameStepper(videoRef: React.RefObject<HTMLVideoElement | nul
   return {
     fps,
     fpsMeasured,
+    playbackRate,
+    setPlaybackRate,
     duration,
     frame,
     playing,

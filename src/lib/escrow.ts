@@ -201,19 +201,34 @@ export function isExpired(
   return room.deliverDueAt.getTime() <= now.getTime();
 }
 
-/** Human-readable state for the room screen. */
-export function describeStatus(status: RoomStatus): string {
+/** Which side of the room the reader is on. */
+export type Viewer = "trainee" | "trainer";
+
+/**
+ * Human-readable state, FROM THE READER'S SIDE.
+ *
+ * The same room means different things to the two people in it, and a single
+ * label cannot serve both. "With your coach" told the coach that the work was
+ * with their coach - they ARE the coach, and what they needed to know was that
+ * it was waiting on them. A status line that describes somebody else's
+ * situation is worse than no status line.
+ *
+ * Only the states where the two genuinely differ are split; the rest read the
+ * same to everyone and are deliberately not duplicated.
+ */
+export function describeStatus(status: RoomStatus, viewer: Viewer = "trainee"): string {
+  const isCoach = viewer === "trainer";
   switch (status) {
     case "awaiting_payment":
       return "Waiting for payment";
     case "awaiting_delivery":
-      return "With your coach";
+      return isCoach ? "Waiting on you" : "With your coach";
     case "delivered":
-      return "Feedback ready for review";
+      return isCoach ? "Delivered - awaiting approval" : "Feedback ready for review";
     case "disputed":
       return "Disputed - being resolved";
     case "released":
-      return "Complete - coach paid";
+      return isCoach ? "Complete - you were paid" : "Complete - coach paid";
     case "refunded":
       return "Refunded";
     case "cancelled":

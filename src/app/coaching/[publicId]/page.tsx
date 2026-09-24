@@ -75,7 +75,7 @@ export default async function CoachingRoomPage({
     <RoomView
       publicId={room.publicId}
       status={room.status as RoomStatus}
-      statusLabel={describeStatus(room.status as RoomStatus)}
+      statusLabel={describeStatus(room.status as RoomStatus, isTrainer ? "trainer" : "trainee")}
       isTrainer={isTrainer}
       trainerName={room.trainer.name ?? room.trainer.username ?? "Your coach"}
       traineeName={room.trainee.name ?? "Trainee"}

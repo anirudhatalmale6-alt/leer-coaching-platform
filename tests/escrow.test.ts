@@ -7,6 +7,7 @@ import {
   approvalDeadline,
   canTransition,
   deliveryDeadline,
+  describeStatus,
   isAutoApprovable,
   isExpired,
   isTerminal,
@@ -298,5 +299,43 @@ describe("refundCostsPlatformFee", () => {
   test("before capture there is nothing to lose - it is only an authorisation", () => {
     assert.equal(refundCostsPlatformFee({ status: "awaiting_delivery" }), false);
     assert.equal(refundCostsPlatformFee({ status: "awaiting_payment" }), false);
+  });
+});
+
+describe("describeStatus - the reader's own side", () => {
+  test("the coach is not told the work is 'with your coach'", () => {
+    // They ARE the coach. What they need to know is that it is waiting on them.
+    assert.equal(describeStatus("awaiting_delivery", "trainer"), "Waiting on you");
+    assert.equal(describeStatus("awaiting_delivery", "trainee"), "With your coach");
+  });
+
+  test("delivered reads differently from each side", () => {
+    assert.equal(describeStatus("delivered", "trainer"), "Delivered - awaiting approval");
+    assert.equal(describeStatus("delivered", "trainee"), "Feedback ready for review");
+  });
+
+  test("released names who got paid, from the right side", () => {
+    assert.equal(describeStatus("released", "trainer"), "Complete - you were paid");
+    assert.equal(describeStatus("released", "trainee"), "Complete - coach paid");
+  });
+
+  test("states that mean the same thing are not needlessly split", () => {
+    for (const s of ["awaiting_payment", "disputed", "refunded", "cancelled"] as const) {
+      assert.equal(describeStatus(s, "trainer"), describeStatus(s, "trainee"), s);
+    }
+  });
+
+  test("every status returns something, from both sides", () => {
+    const all = ["awaiting_payment","awaiting_delivery","delivered","disputed","released","refunded","cancelled"] as const;
+    for (const s of all) {
+      for (const v of ["trainee", "trainer"] as const) {
+        const label = describeStatus(s, v);
+        assert.ok(label && label.length > 0, `${s}/${v} produced no label`);
+      }
+    }
+  });
+
+  test("defaults to the trainee's wording when no side is given", () => {
+    assert.equal(describeStatus("awaiting_delivery"), "With your coach");
   });
 });

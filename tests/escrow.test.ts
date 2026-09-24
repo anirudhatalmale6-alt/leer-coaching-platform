@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   DELIVERY_WINDOW_HOURS,
   MAX_PRICE_CENTS,
+  MAX_RESUBMITS,
   MIN_PRICE_CENTS,
   approvalDeadline,
   canTransition,
@@ -13,6 +14,7 @@ import {
   isTerminal,
   isValidPrice,
   mayAcceptRefund,
+  mayResubmit,
   platformFeeCents,
   refundCostsPlatformFee,
   trainerShareCents,
@@ -200,9 +202,14 @@ describe("disputes and auto-approval (P2-M3)", () => {
   test("a dispute ends only as released or refunded", () => {
     assert.equal(canTransition("disputed", "released"), true);
     assert.equal(canTransition("disputed", "refunded"), true);
-    // Going back would restart the approval clock and make the auto-approval
-    // deadline meaningless.
-    assert.equal(canTransition("disputed", "delivered"), false);
+    /**
+     * Going back to `delivered` IS allowed now - the coach must be able to
+     * answer a dispute with revised work instead of only being able to forfeit
+     * payment. The concern that originally forbade it (restarting the approval
+     * clock forever) is handled by MAX_RESUBMITS rather than by banning the
+     * transition; see the resubmit tests below.
+     */
+    assert.equal(canTransition("disputed", "delivered"), true);
     assert.equal(canTransition("disputed", "cancelled"), false);
     assert.equal(canTransition("disputed", "disputed"), false);
   });
@@ -337,5 +344,42 @@ describe("describeStatus - the reader's own side", () => {
 
   test("defaults to the trainee's wording when no side is given", () => {
     assert.equal(describeStatus("awaiting_delivery"), "With your coach");
+  });
+});
+
+describe("resubmit - the coach's way out of a dispute (P2-M3 gap)", () => {
+  test("a disputed room can go back to delivered", () => {
+    // Without this the coach's only lever was a full refund: forfeit payment
+    // for work that might just need one clarifying line.
+    assert.equal(canTransition("disputed", "delivered"), true);
+  });
+
+  test("resubmitting is allowed until the cap, then never again", () => {
+    assert.equal(mayResubmit({ status: "disputed", resubmitCount: 0 }), true);
+    assert.equal(mayResubmit({ status: "disputed", resubmitCount: 1 }), true);
+    assert.equal(mayResubmit({ status: "disputed", resubmitCount: MAX_RESUBMITS }), false);
+    assert.equal(mayResubmit({ status: "disputed", resubmitCount: 99 }), false);
+  });
+
+  test("THE CAP IS WHAT PROTECTS AUTO-APPROVAL", () => {
+    // Each resubmission restarts the approval clock. Uncapped, the two of them
+    // could bounce a room between disputed and delivered forever and the
+    // automatic payout would never fire.
+    assert.equal(MAX_RESUBMITS, 2);
+  });
+
+  test("there is nothing to resubmit outside a dispute", () => {
+    for (const status of ["awaiting_payment", "awaiting_delivery", "delivered", "released", "refunded", "cancelled"]) {
+      assert.equal(
+        mayResubmit({ status, resubmitCount: 0 }),
+        false,
+        `${status} should not allow a resubmit`,
+      );
+    }
+  });
+
+  test("a released or refunded room can never be reopened", () => {
+    assert.equal(canTransition("released", "delivered"), false);
+    assert.equal(canTransition("refunded", "delivered"), false);
   });
 });

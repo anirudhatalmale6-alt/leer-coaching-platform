@@ -214,6 +214,11 @@ model CoachingRoom {
   disputedAt     DateTime?
   disputeReason  String?
 
+  /// How many times the coach has answered a dispute with revised work.
+  /// Capped by MAX_RESUBMITS - each one restarts the approval clock, so an
+  /// uncapped loop would destroy the auto-approval guarantee.
+  resubmitCount  Int       @default(0)
+
   /// A mutual-consent refund needs BOTH sides. One proposes, the other
   /// accepts; the proposer can never accept their own - see mayAcceptRefund.
   refundProposedById String?

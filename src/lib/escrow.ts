@@ -45,6 +45,23 @@ export const DELIVERY_WINDOW_HOURS = 24;
  */
 export const APPROVAL_WINDOW_HOURS = 24;
 
+/**
+ * How many times a coach may answer a dispute with revised work.
+ *
+ * Each resubmission gives the trainee a fresh 24 hours to look, which is only
+ * fair - but it also restarts the clock, so an uncapped loop would let a room
+ * ping-pong indefinitely and quietly destroy the auto-approval promise. Two is
+ * enough for "I misread the lift" and "I missed your note"; beyond that the
+ * disagreement is not about the drawing, and the honest exits are approval or
+ * a mutual refund.
+ */
+export const MAX_RESUBMITS = 2;
+
+/** May the coach still answer this dispute with revised work? */
+export function mayResubmit(room: { status: string; resubmitCount: number }): boolean {
+  return room.status === "disputed" && room.resubmitCount < MAX_RESUBMITS;
+}
+
 /** Coaching pass price bounds, from the spec. */
 export const MIN_PRICE_CENTS = 30_00;
 export const MAX_PRICE_CENTS = 500_00;
@@ -165,12 +182,20 @@ const TRANSITIONS: Record<RoomStatus, RoomStatus[]> = {
   awaiting_delivery: ["delivered", "refunded", "cancelled"],
   delivered: ["released", "refunded", "disputed"],
   /**
-   * A dispute can end two ways and only two ways: the trainee accepts the work
-   * after all, or both sides agree to a refund. It deliberately cannot go back
-   * to `delivered` - re-opening the approval clock after a dispute would let a
-   * room bounce between states and make the auto-approval deadline meaningless.
+   * A dispute ends three ways: the trainee accepts after all, both sides agree
+   * a refund, or THE COACH FIXES THE WORK AND RESUBMITS.
+   *
+   * That third path was missing, and its absence was a real hole. The room
+   * told both people to "sort it out between you" while giving the coach no
+   * means to do so - their only lever was offering a full refund, which forces
+   * them to forfeit payment for work that might just need a clarifying line.
+   *
+   * It is capped rather than unlimited. Going back to `delivered` restarts the
+   * approval clock, so without a limit the two of them could bounce a room
+   * between states forever and the auto-approval guarantee would mean nothing.
+   * See MAX_RESUBMITS.
    */
-  disputed: ["released", "refunded"],
+  disputed: ["released", "refunded", "delivered"],
   // Terminal.
   released: [],
   refunded: [],

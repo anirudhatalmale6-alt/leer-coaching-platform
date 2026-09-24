@@ -4,6 +4,7 @@ import { getStripe } from "./stripe";
 import { appUrl } from "./env";
 import {
   approvalDeadline,
+  mayResubmit,
   canTransition,
   deliveryDeadline,
   isAutoApprovable,
@@ -613,6 +614,49 @@ export async function disputeRoom(roomId: string, traineeId: string, reason: str
     // Lost a race with the sweep or with the trainee's own approval.
     throw new RoomError("This room has already been settled.", 409);
   }
+  return prisma.coachingRoom.findUnique({ where: { id: roomId } });
+}
+
+/**
+ * The coach answers a dispute with revised work.
+ *
+ * Deliberately NOT a second `deliverRoom`: the money was captured at the first
+ * delivery, so re-capturing would be wrong and Stripe would reject it anyway.
+ * All this does is replace the marks, hand the trainee a fresh window to look,
+ * and put the room back in front of them.
+ *
+ * Capped by MAX_RESUBMITS. Each resubmission restarts the approval clock, and
+ * without a limit the pair could bounce a room between states forever, which
+ * would quietly cancel the auto-approval guarantee the whole escrow rests on.
+ */
+export async function resubmitRoom(roomId: string, trainerId: string, annotations: string) {
+  const room = await prisma.coachingRoom.findUnique({ where: { id: roomId } });
+  if (!room) throw new RoomError("Room not found.", 404);
+  if (room.trainerId !== trainerId) throw new RoomError("Only the coach can resubmit.", 403);
+  if (room.status !== "disputed") {
+    throw new RoomError("There is no open dispute to answer.", 409);
+  }
+  if (!mayResubmit(room)) {
+    throw new RoomError(
+      "You have already resubmitted twice. From here the trainee can approve, or either of you can offer a refund.",
+      409,
+    );
+  }
+
+  const now = new Date();
+  const claimed = await advance(roomId, "disputed", "delivered", {
+    annotations,
+    deliveredAt: now,
+    // A fresh window: the trainee is being asked to look at new work, so the
+    // clock that pays the coach automatically starts again from now.
+    approveDueAt: approvalDeadline(now),
+    resubmitCount: room.resubmitCount + 1,
+    // The complaint has been answered; a new one starts a new dispute.
+    disputeReason: null,
+    disputedAt: null,
+  });
+  if (!claimed) throw new RoomError("This room has already moved on.", 409);
+
   return prisma.coachingRoom.findUnique({ where: { id: roomId } });
 }
 

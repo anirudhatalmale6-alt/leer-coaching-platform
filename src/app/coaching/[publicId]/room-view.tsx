@@ -36,6 +36,8 @@ type Props = {
   closeReason: string | null;
   /** Whether the coach's transfer actually reached Stripe. */
   payoutSent: boolean;
+  /** How many times the coach has already answered a dispute. */
+  resubmitCount: number;
 };
 
 function money(cents: number, currency: string) {
@@ -143,6 +145,8 @@ export default function RoomView(props: Props) {
     },
     [props.publicId, router],
   );
+
+  const canResubmit = props.resubmitCount < 2;
 
   const act = useCallback(
     (what: "deliver" | "approve") =>
@@ -313,6 +317,14 @@ export default function RoomView(props: Props) {
         )}
 
         {/* The approval clock, and the dispute that stops it. */}
+        {status === "delivered" && props.resubmitCount > 0 && (
+          <div className="mt-6 rounded-lg border border-[var(--accent)]/30 bg-[var(--accent)]/5 p-4 text-sm text-[var(--accent)]">
+            {props.isTrainer
+              ? "You resubmitted your feedback. The trainee has a fresh 24 hours to review it."
+              : "Your coach has revised their feedback after your comments. Take another look - you have a fresh 24 hours."}
+          </div>
+        )}
+
         {status === "delivered" && (
           <div className="mt-6 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4 text-sm text-[var(--muted)]">
             {approvalCountdown === "overdue" ? (
@@ -343,9 +355,18 @@ export default function RoomView(props: Props) {
               </p>
             )}
             <p className="mt-2 text-xs text-[var(--muted)]">
+              {/*
+                This used to say "sort it out between you" while giving the
+                coach no means to do so - their only lever was forfeiting the
+                whole payment. Now it names the actual options, per side.
+              */}
               Nothing is released while this is open - the automatic payout is
-              paused. Sort it out between you: the trainee can approve once
-              they are happy, or either of you can offer a full refund.
+              paused.{" "}
+              {props.isTrainer
+                ? canResubmit
+                  ? "Redraw or add to your feedback above, then resubmit it below. You can also offer a full refund."
+                  : "You have used both resubmissions. From here the trainee can approve, or either of you can offer a full refund."
+                : "Your coach can revise their feedback and resubmit it, or either of you can offer a full refund. You can also approve once you are happy."}
             </p>
           </div>
         )}
@@ -423,6 +444,16 @@ export default function RoomView(props: Props) {
 
           {/* Approving is also how a dispute ends well: the trainee talks to
               their coach, is satisfied, and releases the money themselves. */}
+          {props.isTrainer && status === "disputed" && canResubmit && (
+            <button
+              onClick={() => post("resubmit", { annotations: serialiseAnnotations(marks) })}
+              disabled={busy}
+              className="rounded-lg bg-[var(--accent)] px-5 py-2.5 font-semibold text-[var(--on-accent)] transition hover:brightness-110 disabled:bg-[var(--surface-2)] disabled:text-[var(--muted)]"
+            >
+              {busy ? "Resubmitting..." : "Resubmit coaching"}
+            </button>
+          )}
+
           {!props.isTrainer && status === "disputed" && (
             <button
               onClick={() => act("approve")}

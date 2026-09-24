@@ -415,13 +415,44 @@ export async function retryPendingPayouts(limit = 25) {
   for (const room of stuck) {
     if (!room.trainer.stripeAccountId) continue;
     try {
+      /**
+       * Ask Stripe first: did a transfer for this room already happen?
+       *
+       * This, not the idempotency key, is the real protection against paying
+       * twice. A room can lose its transfer id without the money being unsent
+       * - the transfer succeeds and the database write afterwards fails - and
+       * in that case the only honest move is to adopt the existing transfer
+       * rather than make another.
+       */
+      const existing = await stripe.transfers.list({ transfer_group: room.id, limit: 1 });
+      if (existing.data[0]) {
+        await prisma.coachingRoom.update({
+          where: { id: room.id },
+          data: { transferId: existing.data[0].id, closeReason: "trainee_approved" },
+        });
+        paid.push(room.publicId);
+        continue;
+      }
+
+      /**
+       * PARAMETERS MUST MATCH THE FIRST ATTEMPT EXACTLY.
+       *
+       * The first version of this retry added `leerRetry: "1"` to the metadata
+       * and reused the same idempotency key. Stripe rejects that outright -
+       * "Keys for idempotent requests can only be used with the same
+       * parameters they were first used with" - so the retry could never
+       * succeed, on any run, for any room. It looked correct and was dead on
+       * arrival. Found by reproducing the call against the stuck live room
+       * rather than trusting that a retry which reported "0 paid" was simply
+       * waiting on balance.
+       */
       const transfer = await stripe.transfers.create(
         {
           amount: trainerShareCents(room.priceCents),
           currency: room.currency,
           destination: room.trainer.stripeAccountId,
           transfer_group: room.id,
-          metadata: { leerRoomId: room.id, leerRetry: "1" },
+          metadata: { leerRoomId: room.id },
         },
         { idempotencyKey: `leer-transfer-${room.id}` },
       );
@@ -431,8 +462,8 @@ export async function retryPendingPayouts(limit = 25) {
       });
       paid.push(room.publicId);
     } catch (err) {
-      // Still not enough available balance, most likely. Leave it for the next
-      // run rather than losing the record of what is owed.
+      // Usually still not enough AVAILABLE balance. Leave it for the next run
+      // rather than losing the record of what is owed.
       console.error("[rooms] payout retry failed for", room.publicId, err);
     }
   }

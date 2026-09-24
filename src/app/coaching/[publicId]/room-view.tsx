@@ -29,6 +29,8 @@ type Props = {
   refundProposedByMe: boolean | null;
   refundReason: string | null;
   closeReason: string | null;
+  /** Whether the coach's transfer actually reached Stripe. */
+  payoutSent: boolean;
 };
 
 function money(cents: number, currency: string) {
@@ -222,16 +224,46 @@ export default function RoomView(props: Props) {
         )}
 
         {status === "released" && (
-          <div className="mt-6 rounded-lg border border-[var(--accent)]/30 bg-[var(--accent)]/5 p-4 text-sm text-[var(--accent)]">
-            {props.isTrainer ? (
+          <div
+            className={`mt-6 rounded-lg border p-4 text-sm ${
+              props.payoutSent
+                ? "border-[var(--accent)]/30 bg-[var(--accent)]/5 text-[var(--accent)]"
+                : "border-[var(--warn)]/40 bg-[var(--warn)]/10 text-[var(--warn)]"
+            }`}
+          >
+            {/*
+              NEVER claim a payout that has not happened.
+
+              This banner used to say "has been transferred" the moment the
+              room was approved, whether or not the transfer actually reached
+              Stripe. It does not always: captured funds sit in the platform
+              balance as PENDING before they are AVAILABLE, and a transfer
+              against a balance that has not settled fails. That happened on
+              the live account - the coach was told $400 had been sent while
+              Stripe had sent nothing.
+            */}
+            {props.payoutSent ? (
+              props.isTrainer ? (
+                <>
+                  Approved. {money(props.trainerShare, props.currency)} has been
+                  transferred to your Stripe account.
+                </>
+              ) : (
+                <>
+                  Approved and closed. {props.trainerName} has been paid for
+                  this session.
+                </>
+              )
+            ) : props.isTrainer ? (
               <>
-                Approved. {money(props.trainerShare, props.currency)} has been
-                transferred to your Stripe account.
+                Approved. Your {money(props.trainerShare, props.currency)} is
+                queued for payout and will move as soon as the funds settle -
+                usually within a day or two. Nothing is needed from you.
               </>
             ) : (
               <>
-                Approved and closed. {props.trainerName} has been paid for this
-                session.
+                Approved and closed. {props.trainerName}&rsquo;s payout is on
+                its way.
               </>
             )}
           </div>

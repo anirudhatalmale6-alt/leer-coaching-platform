@@ -95,6 +95,7 @@ export default async function CoachingRoomPage({
       }
       refundReason={room.refundReason}
       closeReason={room.closeReason}
+      payoutSent={Boolean(room.transferId)}
     />
   );
 }

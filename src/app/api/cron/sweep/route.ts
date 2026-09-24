@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { autoApproveRoom, refundExpiredRoom } from "@/lib/rooms";
+import { autoApproveRoom, refundExpiredRoom, retryPendingPayouts } from "@/lib/rooms";
 
 /**
  * The 24-hour timeout sweep, replacing the spec's BullMQ queue.
@@ -100,6 +100,16 @@ async function sweep() {
     }
   }
 
+  /**
+   * 3. Coaches who were approved but whose transfer never went through.
+   *
+   * Captured funds are PENDING before they are AVAILABLE, so a payout made
+   * moments after capture can fail on balance and leave money owed with only a
+   * log line to show for it. Retrying here is what turns that into a
+   * self-healing state instead of a silent debt.
+   */
+  const payouts = await retryPendingPayouts(MAX_PER_RUN);
+
   // If we hit either cap there is more to do; say so rather than reporting a
   // clean run and quietly leaving people waiting.
   const truncated = expired.length === MAX_PER_RUN || lapsed.length === MAX_PER_RUN;
@@ -107,6 +117,8 @@ async function sweep() {
     checked: expired.length + lapsed.length,
     refunded: refunded.length,
     released: released.length,
+    payoutsRetried: payouts.attempted,
+    payoutsPaid: payouts.paid,
     rooms: refunded,
     releasedRooms: released,
     truncated,

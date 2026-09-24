@@ -382,6 +382,65 @@ async function payOutTrainer(
 }
 
 /**
+ * Retry payouts that were claimed but never actually sent.
+ *
+ * WHY THIS HAS TO EXIST
+ *
+ * `payOutTrainer` deliberately keeps the room `released` when the transfer
+ * throws - the work was accepted and the money is captured, so un-approving it
+ * would be worse. It marks `closeReason: "payout_pending"` and logs.
+ *
+ * That was only half a design. Nothing ever retried, so a failed transfer
+ * meant a coach was owed money and the only record was a log line nobody
+ * reads. It happened on the live account within a week: captured funds land in
+ * the platform balance as PENDING, a transfer needs AVAILABLE balance, and a
+ * $400 payout against $164 available failed exactly as Stripe documents.
+ *
+ * The transfer uses the same idempotency key as the original attempt, so a
+ * retry can never pay twice - if the first call actually did reach Stripe,
+ * Stripe returns that same transfer instead of making another.
+ */
+export async function retryPendingPayouts(limit = 25) {
+  const stripe = getStripe();
+  if (!stripe) return { attempted: 0, paid: 0, rooms: [] as string[] };
+
+  const stuck = await prisma.coachingRoom.findMany({
+    where: { status: "released", transferId: null },
+    orderBy: { closedAt: "asc" },
+    take: limit,
+    include: { trainer: { select: { stripeAccountId: true } } },
+  });
+
+  const paid: string[] = [];
+  for (const room of stuck) {
+    if (!room.trainer.stripeAccountId) continue;
+    try {
+      const transfer = await stripe.transfers.create(
+        {
+          amount: trainerShareCents(room.priceCents),
+          currency: room.currency,
+          destination: room.trainer.stripeAccountId,
+          transfer_group: room.id,
+          metadata: { leerRoomId: room.id, leerRetry: "1" },
+        },
+        { idempotencyKey: `leer-transfer-${room.id}` },
+      );
+      await prisma.coachingRoom.update({
+        where: { id: room.id },
+        data: { transferId: transfer.id, closeReason: "trainee_approved" },
+      });
+      paid.push(room.publicId);
+    } catch (err) {
+      // Still not enough available balance, most likely. Leave it for the next
+      // run rather than losing the record of what is owed.
+      console.error("[rooms] payout retry failed for", room.publicId, err);
+    }
+  }
+
+  return { attempted: stuck.length, paid: paid.length, rooms: paid };
+}
+
+/**
  * The 24 hour timeout. Cancels the authorisation so the trainee is never
  * charged. Called by the cron sweep, never by a user.
  */

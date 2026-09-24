@@ -435,17 +435,34 @@ export async function retryPendingPayouts(limit = 25) {
       }
 
       /**
-       * PARAMETERS MUST MATCH THE FIRST ATTEMPT EXACTLY.
+       * A RETRY NEEDS A FRESH IDEMPOTENCY KEY. This took two attempts to get
+       * right, and both failures are worth remembering.
        *
-       * The first version of this retry added `leerRetry: "1"` to the metadata
-       * and reused the same idempotency key. Stripe rejects that outright -
-       * "Keys for idempotent requests can only be used with the same
-       * parameters they were first used with" - so the retry could never
-       * succeed, on any run, for any room. It looked correct and was dead on
-       * arrival. Found by reproducing the call against the stuck live room
-       * rather than trusting that a retry which reported "0 paid" was simply
-       * waiting on balance.
+       * First I reused the original key but changed the metadata, and Stripe
+       * refused: "Keys for idempotent requests can only be used with the same
+       * parameters they were first used with." Dead on arrival, every room,
+       * every run.
+       *
+       * Then I matched the parameters exactly - and it STILL failed, with
+       * `balance_insufficient`, while the account had $746 available against a
+       * $400 transfer. Stripe caches the RESULT of an idempotent request,
+       * errors included, for 24 hours. The original attempt genuinely did fail
+       * on balance, so every later call with that key replayed that stored
+       * failure and never looked at the real balance again. An idempotency key
+       * is not a retry mechanism; it is a guarantee that one request happens
+       * once.
+       *
+       * So the key is per-attempt, and the `transfers.list` check above is
+       * what prevents paying twice. The room is also claimed conditionally
+       * below, the same trick `advance()` uses, so two sweeps racing cannot
+       * both reach this line for the same room.
        */
+      const claimed = await prisma.coachingRoom.updateMany({
+        where: { id: room.id, status: "released", transferId: null },
+        data: { closeReason: "payout_in_flight" },
+      });
+      if (claimed.count !== 1) continue;
+
       const transfer = await stripe.transfers.create(
         {
           amount: trainerShareCents(room.priceCents),
@@ -454,7 +471,7 @@ export async function retryPendingPayouts(limit = 25) {
           transfer_group: room.id,
           metadata: { leerRoomId: room.id },
         },
-        { idempotencyKey: `leer-transfer-${room.id}` },
+        { idempotencyKey: `leer-transfer-${room.id}-${Date.now()}` },
       );
       await prisma.coachingRoom.update({
         where: { id: room.id },
@@ -462,9 +479,14 @@ export async function retryPendingPayouts(limit = 25) {
       });
       paid.push(room.publicId);
     } catch (err) {
-      // Usually still not enough AVAILABLE balance. Leave it for the next run
-      // rather than losing the record of what is owed.
+      // Usually still not enough AVAILABLE balance. Put the room back into
+      // the state the next run looks for - transferId is still null, so it is
+      // picked up again - rather than losing the record of what is owed.
       console.error("[rooms] payout retry failed for", room.publicId, err);
+      await prisma.coachingRoom.updateMany({
+        where: { id: room.id, transferId: null },
+        data: { closeReason: "payout_pending" },
+      });
     }
   }
 

@@ -39,6 +39,16 @@ type Props = {
  */
 export default function AnalysisCanvas({ primary, secondary }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
+  const controlsRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * How tall the stage may be so everything below it stays visible.
+   *
+   * A viewport fraction for the server render - there is no DOM to measure
+   * yet, and rendering a sensible guess avoids a visible jump - then replaced
+   * by a real measurement on the client.
+   */
+  const [stageMaxHeight, setStageMaxHeight] = useState("65vh");
   const glCanvasRef = useRef<HTMLCanvasElement>(null);
   const drawCanvasRef = useRef<HTMLCanvasElement>(null);
   const videoARef = useRef<HTMLVideoElement>(null);
@@ -406,6 +416,36 @@ export default function AnalysisCanvas({ primary, secondary }: Props) {
 
   // --- render --------------------------------------------------------------
 
+  useEffect(() => {
+    const measure = () => {
+      const stage = wrapRef.current;
+      const controls = controlsRef.current;
+      if (!stage || !controls) return;
+
+      // Document-relative, so the answer does not change as the page scrolls.
+      const stageTop = stage.getBoundingClientRect().top + window.scrollY;
+      const below = controls.getBoundingClientRect().height;
+      const BREATHING_ROOM = 24;
+
+      const available = window.innerHeight - stageTop - below - BREATHING_ROOM;
+      // Never collapse the stage to nothing on a short window - a coach can
+      // scroll a little rather than analyse a postage stamp.
+      setStageMaxHeight(`${Math.max(220, Math.round(available))}px`);
+    };
+
+    measure();
+    window.addEventListener("resize", measure);
+    // The controls grow when a warning appears, and the banners ABOVE the
+    // canvas change as the room's status changes - both move the stage.
+    const ro = new ResizeObserver(measure);
+    if (controlsRef.current) ro.observe(controlsRef.current);
+    if (document.body) ro.observe(document.body);
+    return () => {
+      window.removeEventListener("resize", measure);
+      ro.disconnect();
+    };
+  }, []);
+
   return (
     <div className="flex flex-col gap-3">
       <Toolbar
@@ -425,10 +465,30 @@ export default function AnalysisCanvas({ primary, secondary }: Props) {
         annotationCount={annotations.length}
       />
 
+      {/*
+        The stage is capped so the toolbar, transport row and timeline stay on
+        screen together - a coach should not have to scroll between the frame
+        they are looking at and the scrubber that moves it.
+
+        MEASURED, not a fixed fraction. `65vh` was not enough on its own: the
+        chrome around the stage is a fixed pixel amount, so on a 1280x800
+        laptop the timeline still fell below the fold. And the amount DIFFERS
+        PER PAGE - the coaching room stacks a status header, the focus note, a
+        countdown and the action row above this, and it grows again when a
+        dispute banner or codec warning appears. Any constant tuned on /canvas
+        is wrong in the room, which is the screen that actually matters.
+
+        maxWidth is derived from the same number so the box stays exactly 16:9
+        rather than letterboxing itself.
+      */}
       <div
         ref={wrapRef}
-        className="relative w-full overflow-hidden rounded-xl border border-[var(--border)] bg-black"
-        style={{ aspectRatio: "16 / 9" }}
+        className="relative mx-auto w-full overflow-hidden rounded-xl border border-[var(--border)] bg-black"
+        style={{
+          aspectRatio: "16 / 9",
+          maxHeight: stageMaxHeight,
+          maxWidth: `calc(${stageMaxHeight} * 16 / 9)`,
+        }}
       >
         <canvas ref={glCanvasRef} className="absolute inset-0 h-full w-full" />
         <canvas
@@ -508,11 +568,15 @@ export default function AnalysisCanvas({ primary, secondary }: Props) {
         )}
       </div>
 
-      <Transport
-        stepper={stepper}
-        annotatedFrames={framesWithAnnotations}
-        onThisFrame={onThisFrame}
-      />
+      {/* Measured to size the stage above: everything in here has to stay on
+          screen alongside the video. */}
+      <div ref={controlsRef}>
+        <Transport
+          stepper={stepper}
+          annotatedFrames={framesWithAnnotations}
+          onThisFrame={onThisFrame}
+        />
+      </div>
 
       {split && secondary && (
         <div className="flex items-center gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-4 py-3 text-sm">

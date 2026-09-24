@@ -161,10 +161,18 @@ export default function RoomView(props: Props) {
             <p className="mt-2 text-sm">
               {money(props.priceCents, props.currency)}
             </p>
-            <p className="text-xs text-[var(--muted)]">
-              coach {money(props.trainerShare, props.currency)} · LEER{" "}
-              {money(props.platformFee, props.currency)}
-            </p>
+            {/*
+              The 80/20 split is the COACH's business, not the trainee's. A
+              trainee is buying a coaching pass for one price; itemising how
+              the platform divides it invites "so why am I paying you $100 to
+              forward $400" and answers a question nobody asked.
+            */}
+            {props.isTrainer && (
+              <p className="text-xs text-[var(--muted)]">
+                you {money(props.trainerShare, props.currency)} &middot; LEER{" "}
+                {money(props.platformFee, props.currency)}
+              </p>
+            )}
           </div>
         </div>
 
@@ -205,8 +213,17 @@ export default function RoomView(props: Props) {
 
         {status === "released" && (
           <div className="mt-6 rounded-lg border border-[var(--accent)]/30 bg-[var(--accent)]/5 p-4 text-sm text-[var(--accent)]">
-            Approved. {money(props.trainerShare, props.currency)} has been transferred
-            to the coach.
+            {props.isTrainer ? (
+              <>
+                Approved. {money(props.trainerShare, props.currency)} has been
+                transferred to your Stripe account.
+              </>
+            ) : (
+              <>
+                Approved and closed. {props.trainerName} has been paid for this
+                session.
+              </>
+            )}
           </div>
         )}
 

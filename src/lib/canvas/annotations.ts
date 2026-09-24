@@ -154,3 +154,56 @@ export function drawAnnotation(
 
   ctx.restore();
 }
+
+/**
+ * Turn stored annotations back into drawable marks.
+ *
+ * This is the coach's delivered work coming out of the database, so it is
+ * parsed defensively rather than trusted: a single malformed row must not
+ * throw inside a render and take down a coaching room somebody paid for.
+ * Anything unrecognised is dropped, and what remains is still drawable.
+ *
+ * Point counts are checked per kind because the renderer indexes into
+ * `points` directly - a "line" carrying one point would throw on redraw,
+ * which is exactly the sort of failure that only appears in production.
+ */
+export function parseAnnotations(raw: string | null | undefined): Annotation[] {
+  if (!raw) return [];
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+
+  const out: Annotation[] = [];
+  for (const item of parsed) {
+    if (!item || typeof item !== "object") continue;
+    const a = item as Record<string, unknown>;
+
+    const kind = a.kind;
+    if (kind !== "line" && kind !== "angle" && kind !== "text") continue;
+    if (typeof a.id !== "string" || typeof a.colour !== "string") continue;
+    if (typeof a.frame !== "number" || !Number.isFinite(a.frame) || a.frame < 0) continue;
+    if (a.source !== "a" && a.source !== "b") continue;
+
+    const points = a.points;
+    if (!Array.isArray(points)) continue;
+    if (points.length !== POINTS_REQUIRED[kind]) continue;
+    if (!points.every((p) => p && typeof p === "object"
+        && Number.isFinite((p as Point).x) && Number.isFinite((p as Point).y))) {
+      continue;
+    }
+    if (kind === "text" && typeof a.text !== "string") continue;
+
+    out.push(a as unknown as Annotation);
+  }
+  return out;
+}
+
+/** What gets sent to the server on delivery. */
+export function serialiseAnnotations(annotations: Annotation[]): string {
+  return JSON.stringify(annotations);
+}

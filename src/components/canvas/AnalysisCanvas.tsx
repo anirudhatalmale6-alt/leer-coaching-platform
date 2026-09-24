@@ -38,6 +38,23 @@ type Props = {
    * over their feedback and then lose it, which looked like a bug.
    */
   readOnly?: boolean;
+  /**
+   * Marks the coach already delivered, loaded from the session.
+   *
+   * Without this the canvas always started empty, so even saved feedback was
+   * invisible - see the note on onAnnotationsChange.
+   */
+  initialAnnotations?: Annotation[];
+  /**
+   * Raised whenever the marks change, so the page above can send them when the
+   * coach delivers.
+   *
+   * THE CANVAS USED TO OWN THESE PRIVATELY AND NOTHING EVER READ THEM. The
+   * deliver call sent a hardcoded empty list, so a coach could draw for twenty
+   * minutes, press Submit, and ship nothing at all. The marks are the product;
+   * they have to leave this component.
+   */
+  onAnnotationsChange?: (annotations: Annotation[]) => void;
 };
 
 /**
@@ -47,7 +64,13 @@ type Props = {
  * 2D canvas above it for annotations. Pointer events land on the 2D layer,
  * which owns the coordinate maths, and the WebGL layer just paints pixels.
  */
-export default function AnalysisCanvas({ primary, secondary, readOnly = false }: Props) {
+export default function AnalysisCanvas({
+  primary,
+  secondary,
+  readOnly = false,
+  initialAnnotations,
+  onAnnotationsChange,
+}: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const controlsRef = useRef<HTMLDivElement>(null);
 
@@ -69,7 +92,20 @@ export default function AnalysisCanvas({ primary, secondary, readOnly = false }:
   const [split, setSplit] = useState(false);
   const [tool, setTool] = useState<Tool>("line");
   const [colour, setColour] = useState(PALETTE[0]);
-  const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  const [annotations, setAnnotations] = useState<Annotation[]>(initialAnnotations ?? []);
+
+  /**
+   * Keep the page above in step with the marks.
+   *
+   * A ref for the callback so this effect depends only on the annotations -
+   * an inline arrow passed by the parent changes identity every render and
+   * would make this fire in a loop.
+   */
+  const onChangeRef = useRef(onAnnotationsChange);
+  onChangeRef.current = onAnnotationsChange;
+  useEffect(() => {
+    onChangeRef.current?.(annotations);
+  }, [annotations]);
   const [pending, setPending] = useState<Point[]>([]);
   const [seq, setSeq] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);

@@ -2,6 +2,11 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import AnalysisCanvas from "@/components/canvas/AnalysisCanvas";
+import {
+  parseAnnotations,
+  serialiseAnnotations,
+  type Annotation,
+} from "@/lib/canvas/annotations";
 import type { RoomStatus } from "@/lib/escrow";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -84,6 +89,18 @@ export default function RoomView(props: Props) {
    * In an effect, not during render: canPlayType needs a DOM, and calling it
    * while rendering guarantees a server/client hydration mismatch.
    */
+  /**
+   * The coach's marks live here, not inside the canvas.
+   *
+   * They are seeded from what was delivered so a saved session redraws, and
+   * they are what gets sent on delivery. Previously the canvas kept them to
+   * itself and the deliver call posted a hardcoded empty list - so the marks
+   * never reached the server and the trainee always saw a bare clip.
+   */
+  const [marks, setMarks] = useState<Annotation[]>(() =>
+    parseAnnotations(props.annotations),
+  );
+
   const [panel, setPanel] = useState<"none" | "dispute" | "refund">("none");
   const [note, setNote] = useState("");
   const [codecUnsupported, setCodecUnsupported] = useState(false);
@@ -129,8 +146,12 @@ export default function RoomView(props: Props) {
 
   const act = useCallback(
     (what: "deliver" | "approve") =>
-      post(what, what === "deliver" ? { annotations: "[]" } : {}),
-    [post],
+      post(
+        what,
+        // The coach's actual work, not an empty placeholder.
+        what === "deliver" ? { annotations: serialiseAnnotations(marks) } : {},
+      ),
+    [post, marks],
   );
 
   return (
@@ -502,6 +523,8 @@ export default function RoomView(props: Props) {
             <AnalysisCanvas
               primary={{ id: "a", url: props.videoUrl, label: "Session" }}
               readOnly={!props.isTrainer}
+              initialAnnotations={marks}
+              onAnnotationsChange={setMarks}
             />
           ) : (
             <div className="rounded-xl border border-dashed border-[var(--border)] p-10 text-center text-sm text-[var(--muted)]">

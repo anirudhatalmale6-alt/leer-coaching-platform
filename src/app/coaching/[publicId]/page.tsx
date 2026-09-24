@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { signPlayback, storageConfigured } from "@/lib/storage/r2";
+import { devShortcutsEnabled } from "@/lib/env";
 import { describeStatus, platformFeeCents, trainerShareCents, type RoomStatus } from "@/lib/escrow";
 import { mayViewRoom, settleApprovalIfLapsed, settleIfExpired } from "@/lib/rooms";
 import RoomView from "./room-view";
@@ -63,7 +64,22 @@ export default async function CoachingRoomPage({
 
   // Playback is a fresh short-lived signature per view; the bucket is private.
   let videoUrl: string | null = null;
-  if (storageConfigured()) {
+
+  /**
+   * DEVELOPMENT ONLY: a room whose clip is a local sample.
+   *
+   * Without this a coaching room cannot be exercised locally at all - the
+   * bucket only accepts the deployed origins, so the video never loads, the
+   * canvas has no viewport, and every pointer lands "outside the video". That
+   * silently made the annotation fix untestable, which is how a broken save
+   * path survived in the first place.
+   *
+   * Gated on the same flag as the other dev shortcuts and deleted with them
+   * before launch - see DEPLOY.md.
+   */
+  if (devShortcutsEnabled && room.videoKey.startsWith("dev-local/")) {
+    videoUrl = "/sample-coaching-a.mp4";
+  } else if (storageConfigured()) {
     try {
       videoUrl = await signPlayback(room.videoKey, 3600);
     } catch {
